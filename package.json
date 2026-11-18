@@ -126,7 +126,7 @@
   },
   "dependencies": {
     "@wecom/aibot-node-sdk": "1.0.7",
-    "better-sqlite3": "^13.0.3",
+    "better-sqlite3": "^13.2.0",
     "electron-updater": "^6.8.9",
     "express": "^5.3.0",
     "unpdf": "1.8.1"
@@ -135,7 +135,7 @@
     "@electron/rebuild": "^4.2.0",
     "electron": "^43.7.5",
     "electron-builder": "^26.15.7",
-    "minimatch": "^11.0.4"
+    "minimatch": "^11.0.8"
   },
   "allowScripts": {
     "electron@43.7.5": true,
