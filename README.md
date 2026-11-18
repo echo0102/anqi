@@ -7,9 +7,10 @@
 <p align="center">为独立执业律师设计的自托管案件工作台 · 内置案件 AI 助理（beta）</p>
 
 <p align="center">
-  <a href="https://github.com/zj-ai-lab/anqi/releases/latest"><img alt="最新版本" src="https://img.shields.io/github/v/release/zj-ai-lab/anqi?label=release&color=087f5b"></a>
+  <a href="https://github.com/echo0102/anqi/releases/latest"><img alt="最新版本" src="https://img.shields.io/github/v/release/echo0102/anqi?label=release&color=087f5b"></a>
   <a href="LICENSE"><img alt="AGPL-3.0-only" src="https://img.shields.io/badge/license-AGPL--3.0--only-663399"></a>
-  <img alt="macOS、Android、Web" src="https://img.shields.io/badge/clients-macOS%20%C2%B7%20Android%20%C2%B7%20Web-111111">
+  <img alt="Windows、macOS、Android、Web" src="https://img.shields.io/badge/clients-Windows%20%C2%B7%20macOS%20%C2%B7%20Android%20%C2%B7%20Web-111111">
+  <a href="https://github.com/echo0102/anqi/releases/latest"><img alt="Windows 安装包" src="https://img.shields.io/badge/Windows-x64%20安装包-0078D4?logo=windows&logoColor=white"></a>
   <img alt="Node.js 22 LTS" src="https://img.shields.io/badge/Node.js-22%20LTS-339933?logo=nodedotjs&logoColor=white">
   <img alt="GHCR 镜像" src="https://img.shields.io/badge/container-GHCR-2496ED?logo=docker&logoColor=white">
 </p>
@@ -27,7 +28,7 @@
 
 - [30 秒理解案齐](#30-秒理解案齐)
 - [内置 AI 助理（beta）](#内置-ai-助理beta) — 它能做什么 · 怎么开启 · 边界与审批
-- [下载安装](#下载安装) — [macOS 桌面版](#macos-桌面版推荐零配置) · [Android 手机版](#android-手机版) · [服务器版](#服务器版给会折腾的人)
+- [下载安装](#下载安装) — [Windows 桌面版](#windows-桌面版推荐零配置) · [macOS 桌面版](#macos-桌面版推荐零配置) · [Android 手机版](#android-手机版) · [服务器版](#服务器版给会折腾的人)
 - [功能详解](#功能详解)
 - [界面：一个骨架，三种材质](#界面一个骨架三种材质)
 - [设计原则：为什么这么做](#设计原则为什么这么做)
@@ -95,9 +96,33 @@
 
 ## 下载安装
 
-按上手门槛从低到高排。**只想在自己电脑上用，选第一个就够了。**
+按上手门槛从低到高排。**只想在自己电脑上用，选桌面版就够了。**
 
-### macOS 桌面版（推荐，零配置）
+本仓库提供 **Windows x64 可安装版（`.exe`）**，可在 [Releases](https://github.com/echo0102/anqi/releases/latest) 直接下载。
+
+### Windows 桌面版（推荐，零配置）
+
+一个 NSIS 安装包（`.exe`），双击安装即可。数据全在你自己的电脑里，**不需要服务器、不需要 Docker、不需要任何配置**。
+
+| 你的电脑 | 下载 |
+|---|---|
+| Windows 10 / 11（64 位） | **[anqi-2.12.9-windows-x64.exe](https://github.com/echo0102/anqi/releases/download/v2.12.9/anqi-2.12.9-windows-x64.exe)** |
+
+> 最新版与历史安装包见 [Releases 页面](https://github.com/echo0102/anqi/releases)。也可从源码自行构建，见 [Windows 桌面版](docs/WINDOWS-DESKTOP.md)。
+
+**安装与首次启动：**
+
+1. 下载上面的 `.exe`，双击运行安装向导（可改安装目录，并创建桌面 / 开始菜单快捷方式）。
+2. 若 SmartScreen 提示「未知应用」，选「更多信息 → 仍要运行」（本仓库发行包未做代码签名）。
+3. 引导页会让你做三件事：
+   - 选一个**数据保存位置**（里面会放数据库和案件夹）；
+   - 设一个**登录用户名和密码**（保护你的案件数据）；
+   - 可选填模型 API key——留空也完全能用。
+4. 完成后主窗口打开。先在「案件」页新建一个案件试试。
+
+**说明：** 当前 Windows 安装包保留案件台账、期限、待办、费用与文件等功能；内置 DSH 案件助理暂未随 Windows 包分发（入口会隐藏）。从源码构建细节见 [docs/WINDOWS-DESKTOP.md](docs/WINDOWS-DESKTOP.md)。
+
+### macOS 桌面版（零配置）
 
 一个 `.dmg`，拖进「应用程序」就能用。数据全在你自己的电脑里，**不需要服务器、不需要 Docker、不需要任何配置**。
 
@@ -106,7 +131,7 @@
 | Apple 芯片（M1 / M2 / M3 / M4） | **[anqi-2.12.9-arm64.dmg](https://github.com/zj-ai-lab/anqi/releases/download/v2.12.9/anqi-2.12.9-arm64.dmg)** |
 | Intel 芯片 | **[anqi-2.12.9-x64.dmg](https://github.com/zj-ai-lab/anqi/releases/download/v2.12.9/anqi-2.12.9-x64.dmg)** |
 
-> 不确定是哪种芯片：点左上角  → 「关于本机」，「芯片」一栏写 Apple M 开头的选 arm64，写 Intel 的选 x64。历史版本与校验文件在 [Releases 页面](https://github.com/zj-ai-lab/anqi/releases)。
+> 不确定是哪种芯片：点左上角  → 「关于本机」，「芯片」一栏写 Apple M 开头的选 arm64，写 Intel 的选 x64。macOS 历史版本与校验文件在上游 [Releases 页面](https://github.com/zj-ai-lab/anqi/releases)。
 
 **安装与首次启动：**
 
@@ -119,8 +144,6 @@
 4. 完成后主窗口打开，就是上面截图里的界面。先在「案件」页新建一个案件试试。
 
 **升级：** 应用启动时会检查有没有新版本，有的话弹窗提示并跳到下载页；下载新 `.dmg` 覆盖安装即可，你的数据目录不动。安装前可核对 Release 页面附带的 `.sha256` 校验值。
-
-> Windows 桌面版：本仓库可从 Windows x64 构建 NSIS 安装包，构建步骤见[Windows 桌面版](docs/WINDOWS-DESKTOP.md)。Windows 包暂不包含 DSH 案件助理；其它案件台账功能可用。
 
 ### Android 手机版
 
