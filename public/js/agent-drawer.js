@@ -1,0 +1,1176 @@
+// 案件助理抽屉（设计稿 §5：状态徽标 + 有限 assistant 文本 + 工具调用摘要 +
+// 可展开错误 + proposal 卡片）。
+//
+// 特性探测：counts.agent=false（未启用，或已启用但白名单字段不合法/apiKeyEnv
+// 指向的环境变量没有值）时，本模块整块不渲染——不挂入口按钮、不建抽屉 DOM、
+// 不连 SSE（沿用 js/nav.js 对 counts.llm 的既有模式，见该文件 mountNav() 里
+// 「未配 key 时不渲染按钮」的注释）。
+//
+// SSE 连接是懒建的：只在用户第一次点开抽屉时才 new EventSource()，不在页面
+// 加载时就默默常驻一条长连接——案件页可能开很多个标签页，谁都不点抽屉的话
+// 不该有谁在后台空转一条 SSE。
+//
+// 事件到 DOM 的映射（服务端形状见 src/routes/agent.js 的 SSE 面注释）：
+//   - 'status'（每次连接建立的首帧，之后不会再收到同名事件）：disabled 时
+//     形状只有 {status,caseId,error}；否则是完整 publicStatus() 投影，包含
+//     pendingInteractions——用来在「打开抽屉」这一刻把已经在等待应答的
+//     approval/question 卡片补渲染出来，不必等下一次恰好广播的
+//     interaction/pending。
+//   - 'worker/ready' / 'turn/start' / 'turn/end' / 'worker/exit'：origin 恒为
+//     'supervisor'，驱动状态徽标 + 系统行。
+//   - 'assistant/chunk'：origin 'wire'，data.chunk 是归一化后的增量块
+//     （{type:'text-delta',text,index} 等，见 @deepseek-ai/dsh-llm 的
+//     BlockAssembler 输出），只对 text-delta 做流式追加。
+//   - 'assistant/message'：origin 'wire'，data.message.content 是内容块数组，
+//     用来在一段助手发言结束时用权威文本收口（覆盖，不是追加）。
+//   - 'tool/call' / 'tool/result'：origin 'wire'，只渲染成一行摘要（工具名 +
+//     只读/写入性质），不展开完整参数/返回值。两者按 callId 关联（tool/call
+//     data 形状是 {turn,step,callId,name,arguments}；tool/result data 形状是
+//     {turn,step,message,error?,meta?}，message 是
+//     createToolResultMessage() 产出的 {..., content:[{type:'tool-result',
+//     toolCallId,content,isError}]}，与前者的 callId 是同一个值——见
+//     @deepseek-ai/dsh-agent-loop/lib/index.js 的 appendToolCall/
+//     appendToolResult）。data 顶层没有 created 字段：anqi_inbox_propose 的
+//     {created:true,...} 是工具返回值，经 renderJson 变成
+//     message.content[0].content[0].text 里的 JSON 文本，需要解析后才能读到
+//     created，data.meta 则只有声明了 output.presentationMeta 的工具才有
+//     （本工具没有）。按 callId 关联而不是按到达顺序猜，是因为并行工具调用
+//     下 tool/call A → tool/call B → tool/result A 时「记住上一次」的写法会
+//     错配到 B。
+//   - 'interaction/pending' / 'interaction/expired'：origin 'supervisor'，
+//     approval 卡片（允许一次/拒绝）与 question 卡片（受限答案表单）。
+//   - 'command/run' / 'command/done'：origin 'wire'，按 commandId 关联，渲染
+//     命令开始/结束系统行；不依赖也不伪造 turn/*。
+import { api, el, toast } from './api.js';
+import { renderMarkdownInto } from './markdown.js';
+
+const STATUS_LABEL = {
+  disabled: '未启用', starting: '启动中', ready: '就绪', running: '运行中',
+  stopping: '停止中', stopped: '已停止', error: '出错', crashed: '已崩溃',
+};
+const STATUS_CHIP_CLASS = {
+  disabled: 'c-gray', starting: 'c-amber', ready: 'c-green', running: 'c-blue',
+  stopping: 'c-amber', stopped: 'c-gray', error: 'c-red', crashed: 'c-red',
+};
+// 会触发「启动/重新启动」按钮的状态：还没起过、或已经落终态但不是 disabled。
+const STARTABLE_STATUSES = new Set(['stopped', 'error', 'crashed']);
+// 只读工具白名单：anqi 自己的三个只读工具，加上三个不写案件数据的 DSH 工具
+// （dsh-tool-skill/dsh-tool-ask-user/dsh-tool-todo 的 skill/ask_user_question/
+// todo_write，工具名见各自 lib/index.js 的 name 字段）：skill 只读取受信任
+// skill 定义；ask_user_question 只是向律师提问、不落任何字段；todo_write 写
+// 的是助理会话自己的待办草稿（不进 anjian.db 的案件表）。三者标「写入」同样
+// 是误导。read/read_image/glob/grep 曾经也在这份名单里——preset 自 2026-08-22
+// 起不再挂载 dsh-tool-fs/dsh-tool-fs-search（见 agent.cordis.yml 顶部注释、
+// docs/agent-gates.md 门禁 1/3「已知限制」§3），这四个工具名不会再出现在
+// 任何 tool/call 事件里，这里同步去掉，避免留一份指向不存在工具的死配置。
+const READONLY_TOOLS = new Set([
+  'mcp__anqi-local__case_folder_info', 'anqi_case_get', 'anqi_digest',
+  // 总入口的认案 / 选案只在会话里登记授权，不写任何案件数据。
+  'anqi_case_resolve', 'anqi_case_select',
+  'skill', 'ask_user_question', 'todo_write',
+]);
+const PROPOSE_TOOL = 'anqi_inbox_propose';
+const MAX_PROMPT_CHARS = 8000;
+const MAX_ANSWER_CHARS = 2000;
+const MAX_IMAGES_PER_MESSAGE = 2;
+const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
+const IMAGE_MEDIA_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif']);
+const ATTACHMENT_JSON_TYPE = 'application/vnd.anqi.agent-attachments+json';
+const ATTACHMENT_ID_RE = /^sha256:[a-f0-9]{64}$/u;
+const DIRECT_RECORDS = {
+  anqi_worklog_add: ['worklog', '日志'], anqi_task_add: ['tasks', '待办'], anqi_event_add: ['events', '开庭/事件'],
+  anqi_contact_upsert: ['contacts', '联系人'], anqi_fact_add: ['facts', '事实'], anqi_deadline_add: ['deadlines', '期限'],
+};
+
+const GLOBAL_ENDPOINT_CONTRACT = ['/api/agent/global/start', '/api/agent/global/prompt', '/api/agent/global/cancel', '/api/agent/global/approval-tier', '/api/agent/global/events'];
+// 案件 scope 的静态契约：fetch(`/api/cases/${caseId}/agent/commands`)
+
+// 全站只有一个抽屉实例（「项目」选择器：总入口 / 在办案件）。两个导出都走同一份
+// sharedCreation；案件页把「本页案件」记在 pageCaseId——它在 mount 函数里同步写入、
+// 在建抽屉的 counts await 之后才被读取，所以无论 nav.js 的 mountGlobalAgentDrawer()
+// 与 case.js 的 mountAgentDrawer() 谁先跑，最终都落在本案。
+const PROJECT_KEY = 'anjian-agent-project';
+let sharedCreation = null;
+let pageCaseId = null;
+
+function readRememberedProject() {
+  try {
+    const remembered = sessionStorage.getItem(PROJECT_KEY) || '';
+    if (/^case:\d+$/u.test(remembered)) return { scope: 'case', caseId: Number(remembered.slice(5)) };
+  } catch { /* sessionStorage 不可用时回到总入口 */ }
+  return { scope: 'global', caseId: null };
+}
+
+async function createAgentDrawer() {
+  let scope = 'global';
+  let caseId = null;
+  // agentPath 带 /api 前缀，只给 EventSource 与原生 fetch 用；api() 帮手自己会补 /api，
+  // 一律走 apiAgentPath，否则请求会变成 /api/api/... 直接 404（2026-10-13 真机验收抓到）。
+  let agentPath = '';
+  let apiAgentPath = '';
+  let commandEndpoint = '';
+  // 页面没有任何 AI 入口挂载点（理论上不会发生，防御一下）
+  if (!document.getElementById('agent-global-entry-slot') && !document.getElementById('agent-entry-slot')) return;
+  let counts;
+  try { counts = await api('/counts'); } catch { return; }
+  if (!counts.agent) return; // 特性探测：未启用/未配置，整块不渲染
+
+  // 默认项目：案件页永远是本案（不读记忆）；其它页读本标签页里用户显式选过的项目，否则总入口。
+  if (pageCaseId != null) { scope = 'case'; caseId = pageCaseId; }
+  else ({ scope, caseId } = readRememberedProject());
+
+  function syncEndpoints() {
+    agentPath = scope === 'global' ? '/api/agent/global' : `/api/cases/${caseId}/agent`;
+    apiAgentPath = scope === 'global' ? '/agent/global' : `/cases/${caseId}/agent`;
+    commandEndpoint = scope === 'global' ? '' : `/api/cases/${caseId}/agent/commands`;
+  }
+  syncEndpoints();
+
+  const state = {
+    es: null,
+    connected: false,
+    status: 'stopped',
+    currentBubble: null,
+    currentBubbleText: '',
+    pendingToolCalls: new Map(), // callId -> name（tool/call 与 tool/result 按 callId 关联，不能按顺序猜——并行工具调用下顺序会错配）
+    pendingCommands: new Map(), // commandId -> name（command/done 不重复携带 name）
+    cards: new Map(), // interactionId -> { el }
+    historyLoaded: false,
+    commands: null, // null=尚未请求；[]=服务端 4xx/空清单，当前 worker 不渲染入口
+    commandFetch: null,
+    commandGeneration: 0,
+    commandMenuItems: [],
+    commandMenuIndex: 0,
+    supportsImages: false,
+    draftImages: [], // {file, previewUrl}；只活在当前页面，发送成功即 revoke
+    submitting: false,
+  };
+
+  const entryButtons = new Map();
+
+  function mountEntry(slotIdToMount, entryScope, entryCaseId) {
+    const slot = document.getElementById(slotIdToMount);
+    if (!slot || entryButtons.has(slotIdToMount)) return;
+    const entryBtn = el('button', {
+      class: entryScope === 'global' ? 'iconbtn' : 'btn small', type: 'button',
+      'aria-label': entryScope === 'global' ? '打开 AI 总入口' : undefined,
+    }, entryScope === 'global' ? 'AI' : 'AI 助理');
+    slot.replaceChildren(entryBtn);
+    entryBtn.addEventListener('click', () => {
+      if (!drawer.hidden) { closeDrawer(); return; }
+      // 案件页的入口按钮只是多一个入口、把默认项目设为本案——不写 sessionStorage 记忆
+      if (entryScope === 'case') switchProject('case', entryCaseId);
+      openDrawer();
+    });
+    entryButtons.set(slotIdToMount, entryBtn);
+  }
+
+  const badge = el('span', { class: 'chip c-gray' }, '未启动');
+  const projectSelect = el('select', { class: 'agent-project-select', 'aria-label': 'AI 项目', title: '选择 AI 项目' });
+  const approvalTierSelect = el('select', {
+    id: 'agent-approval-tier', class: 'agent-approval-tier', 'aria-label': '审批档位',
+    title: '当前案件会话审批档位', disabled: '',
+  },
+  el('option', { value: '1' }, '1 · 谨慎'),
+  el('option', { value: '2' }, '2 · 智能'),
+  el('option', { value: '3' }, '3 · 放开'));
+  if (scope === 'global') approvalTierSelect.hidden = true;
+  const logEl = el('div', { class: 'agent-log' });
+  const roundRecords = el('section', { class: 'agent-round-records', hidden: '' },
+    el('div', { class: 'agent-round-title' }, '本轮记录')
+  );
+  const emptyHint = el('div', { class: 'agent-empty' }, '还没有对话——在下面输入一句话给 AI 助理下达指令。');
+  logEl.append(emptyHint);
+
+  const textarea = el('textarea', {
+    placeholder: '给 AI 助理下达指令……（首次发送会自动启动）', rows: '2', maxlength: String(MAX_PROMPT_CHARS), disabled: '',
+    'aria-controls': 'agent-command-menu', 'aria-expanded': 'false', 'aria-autocomplete': 'list', autocomplete: 'off',
+  });
+  const commandMenu = el('div', {
+    id: 'agent-command-menu', class: 'agent-command-menu', role: 'listbox',
+    'aria-label': '可用斜杠命令', hidden: '',
+  });
+  const commandComposer = el('div', { class: 'agent-command-composer' }, textarea, commandMenu);
+  const fileInput = el('input', {
+    type: 'file', accept: 'image/png,image/jpeg,image/webp,image/gif', multiple: '', hidden: '', disabled: '',
+  });
+  const attachBtn = el('button', {
+    class: 'btn small agent-attach-btn', type: 'button', hidden: '', disabled: '',
+    'aria-label': '粘贴或选择图片', title: '粘贴或选择图片（最多 2 张，单张 8 MiB）',
+  }, '贴图');
+  const imageDrafts = el('div', { class: 'agent-image-drafts', hidden: '', 'aria-label': '待发送图片' });
+  const sendBtn = el('button', { class: 'btn small primary', type: 'submit', disabled: '' }, '发送');
+  const stopBtn = el('button', { class: 'btn small danger', type: 'button', disabled: '' }, '停止');
+
+  const promptForm = el('form', { class: 'agent-prompt-form' },
+    imageDrafts,
+    commandComposer,
+    el('div', { class: 'agent-drawer-actions' }, attachBtn, stopBtn, sendBtn),
+    fileInput,
+  );
+
+  const closeBtn = el('button', { class: 'iconbtn', type: 'button', 'aria-label': '关闭' }, '×');
+  const drawer = el('aside', { class: 'agent-drawer', hidden: '', 'aria-hidden': 'true', role: 'complementary', 'aria-label': 'AI 助理' },
+    el('header', { class: 'agent-drawer-head' },
+      el('div', { class: 'agent-drawer-title' }, 'AI 助理', projectSelect, badge, approvalTierSelect),
+      closeBtn
+    ),
+    el('div', { class: 'agent-drawer-body' }, roundRecords, logEl),
+    el('div', { class: 'agent-drawer-foot' }, promptForm)
+  );
+  const backdrop = el('div', { class: 'agent-drawer-backdrop', hidden: '' });
+  document.body.append(backdrop, drawer);
+
+  function projectKey(nextScope = scope, nextCaseId = caseId) {
+    return nextScope === 'global' ? 'global' : `case:${nextCaseId}`;
+  }
+
+  function rememberProject() {
+    try { sessionStorage.setItem('anjian-agent-project', projectKey()); } catch { /* 私密模式等存不了就不记 */ }
+  }
+
+  function currentProjectLabel() {
+    const text = projectSelect.selectedOptions?.[0]?.textContent;
+    if (text) return text;
+    if (scope === 'global') return '总入口';
+    return caseId === pageCaseId ? '本案' : `案件 ${caseId}`;
+  }
+
+  function announceProject() {
+    document.dispatchEvent(new CustomEvent('anjian:agent-project-changed', {
+      detail: { label: currentProjectLabel(), scope, caseId },
+    }));
+  }
+
+  // 选择器里没有当前项目时（案件列表还没拉、或案件已不在「在办」里）补一个占位选项，
+  // 保证下拉显示与实际端点一致。
+  function syncProjectSelect() {
+    const current = projectKey();
+    if (scope === 'case' && ![...projectSelect.options].some((option) => option.value === current)) {
+      projectSelect.append(el('option', { value: current }, caseId === pageCaseId ? '本案' : `案件 ${caseId}`));
+    }
+    projectSelect.value = current;
+  }
+
+  function renderProjects(rows = []) {
+    const options = [el('option', { value: 'global' }, '总入口 · 不挂案件')];
+    for (const row of Array.isArray(rows) ? rows : []) {
+      if (!Number.isInteger(Number(row?.id))) continue;
+      const label = row.folder_path ? String(row.name || `案件 ${row.id}`) : `${row.name || `案件 ${row.id}`}（未绑定案件夹）`;
+      options.push(el('option', { value: `case:${Number(row.id)}` }, label));
+    }
+    projectSelect.replaceChildren(...options);
+    syncProjectSelect();
+    announceProject();
+  }
+
+  let projectsLoaded = false;
+  let projectsLoading = null;
+  async function loadProjects() {
+    if (projectsLoaded) return;
+    if (!projectsLoading) {
+      projectsLoading = api('/cases?status=active')
+        .then((rows) => { renderProjects(rows); projectsLoaded = true; })
+        .catch(() => { renderProjects([]); })
+        .finally(() => { projectsLoading = null; });
+    }
+    await projectsLoading;
+  }
+
+  function clearConversation() {
+    state.es?.close();
+    state.es = null;
+    state.connected = false;
+    state.historyLoaded = false;
+    state.currentBubble = null;
+    state.currentBubbleText = '';
+    state.pendingToolCalls.clear();
+    state.pendingCommands.clear();
+    state.cards.clear();
+    logEl.replaceChildren(emptyHint);
+    roundRecords.replaceChildren(el('div', { class: 'agent-round-title' }, '本轮记录'));
+    roundRecords.hidden = true;
+  }
+
+  // 切换项目只换「看哪个 worker」：关旧 SSE、换端点前缀、（面板开着时）连新 SSE，
+  // 由首帧 status 的 history 回显。绝不 cancel / stop / start 任何 worker——每个
+  // worker 独立存活，切回来还在；进行中的 turn 也不受影响。
+  // persist 仅在用户显式改动下拉时为 true；案件页自动默认与入口按钮都不落 sessionStorage。
+  function switchProject(nextScope, nextCaseId, { persist = false } = {}) {
+    const normalizedScope = nextScope === 'global' ? 'global' : 'case';
+    const normalizedCaseId = normalizedScope === 'global' ? null : Number(nextCaseId);
+    if (normalizedScope === 'case' && !Number.isInteger(normalizedCaseId)) return;
+    if (normalizedScope !== scope || normalizedCaseId !== caseId) {
+      clearConversation();
+      scope = normalizedScope;
+      caseId = normalizedCaseId;
+      syncEndpoints();
+      // 斜杠命令清单、草稿图片、图片能力都属于旧 worker，不跨项目沿用
+      state.commands = null;
+      state.commandFetch = null;
+      state.commandGeneration += 1;
+      hideCommandMenu();
+      clearDraftImages();
+      applyImageCapability(false);
+      state.status = 'stopped';
+      applyStatus('stopped');
+    }
+    approvalTierSelect.hidden = scope === 'global';
+    syncProjectSelect();
+    announceProject();
+    if (persist) rememberProject();
+    if (!drawer.hidden) connectSSE();
+  }
+
+  projectSelect.addEventListener('change', () => {
+    const value = projectSelect.value;
+    if (value === 'global') switchProject('global', null, { persist: true });
+    else if (/^case:\d+$/u.test(value)) switchProject('case', Number(value.slice(5)), { persist: true });
+  });
+  renderProjects();
+
+  function scrollLogDown() {
+    logEl.scrollTop = logEl.scrollHeight;
+  }
+
+  function clearEmptyHint() {
+    if (emptyHint.isConnected) emptyHint.remove();
+  }
+
+  function appendMsg(cls, text) {
+    clearEmptyHint();
+    const node = el('div', { class: `agent-msg ${cls}` }, text);
+    logEl.append(node);
+    scrollLogDown();
+    return node;
+  }
+
+  const appendSystem = (text) => appendMsg('agent-msg-system', text);
+
+  function attachmentUrl(attachment) {
+    return `/api/cases/${caseId}/agent/attachments/${encodeURIComponent(attachment.attachmentId)}`;
+  }
+
+  function appendUser(text, attachments = []) {
+    const safeAttachments = Array.isArray(attachments)
+      ? attachments.filter((attachment) => (
+        attachment
+        && typeof attachment === 'object'
+        && ATTACHMENT_ID_RE.test(attachment.attachmentId)
+        && IMAGE_MEDIA_TYPES.has(attachment.mediaType)
+      ))
+      : [];
+    const node = appendMsg('agent-msg-user', '');
+    if (text) node.append(el('div', { class: 'agent-msg-text' }, text));
+    if (safeAttachments.length > 0) {
+      const images = safeAttachments.map((attachment) => {
+        const src = attachmentUrl(attachment);
+        const preview = el('img', {
+          class: 'agent-msg-attachment', src, loading: 'lazy',
+          alt: attachment.name || '对话图片',
+        });
+        return el('a', {
+          class: 'agent-msg-attachment-link', href: src, target: '_blank', rel: 'noopener',
+          title: attachment.name || '打开图片',
+        }, preview);
+      });
+      node.append(el('div', { class: 'agent-msg-attachments' }, ...images));
+    }
+    return node;
+  }
+
+  function renderImageDrafts() {
+    imageDrafts.replaceChildren(...state.draftImages.map((draft, index) => el('div', {
+      class: 'agent-image-draft',
+    },
+    el('img', { src: draft.previewUrl, alt: draft.file.name || `待发送图片 ${index + 1}` }),
+    el('button', {
+      type: 'button', class: 'agent-image-draft-remove', 'aria-label': `移除第 ${index + 1} 张图片`,
+      disabled: state.submitting ? '' : null,
+      onclick: () => {
+        if (state.submitting) return;
+        const [removed] = state.draftImages.splice(index, 1);
+        if (removed) URL.revokeObjectURL(removed.previewUrl);
+        renderImageDrafts();
+      },
+    }, '×'))));
+    imageDrafts.hidden = state.draftImages.length === 0;
+  }
+
+  function clearDraftImages() {
+    for (const draft of state.draftImages) URL.revokeObjectURL(draft.previewUrl);
+    state.draftImages = [];
+    fileInput.value = '';
+    renderImageDrafts();
+  }
+
+  function addDraftFiles(rawFiles) {
+    if (!state.supportsImages || state.submitting) return;
+    const files = [...rawFiles].filter(Boolean);
+    if (files.length === 0) return;
+    if (state.draftImages.length + files.length > MAX_IMAGES_PER_MESSAGE) {
+      toast(`一条消息最多只能附 ${MAX_IMAGES_PER_MESSAGE} 张图片`);
+      return;
+    }
+    for (const file of files) {
+      if (!IMAGE_MEDIA_TYPES.has(file.type)) {
+        toast('图片类型只允许 PNG、JPEG、WebP 或 GIF');
+        return;
+      }
+      if (file.size > MAX_IMAGE_BYTES) {
+        toast('单张图片不能超过 8 MiB，请先压缩');
+        return;
+      }
+    }
+    hideCommandMenu();
+    for (const file of files) {
+      state.draftImages.push({ file, previewUrl: URL.createObjectURL(file) });
+    }
+    renderImageDrafts();
+  }
+
+  function encodeDraftImage(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onerror = () => reject(new Error('图片读取失败，请重新选择'));
+      reader.onload = () => {
+        const value = typeof reader.result === 'string' ? reader.result : '';
+        const comma = value.indexOf(',');
+        if (comma < 0) return reject(new Error('图片读取失败，请重新选择'));
+        resolve({ mediaType: file.type, data: value.slice(comma + 1), name: file.name || '粘贴图片' });
+      };
+      reader.readAsDataURL(file);
+    });
+  }
+
+  async function uploadDraftImages() {
+    if (scope === 'global') return [];
+    if (state.draftImages.length === 0) return [];
+    const encodedImages = await Promise.all(state.draftImages.map((draft) => encodeDraftImage(draft.file)));
+    const response = await fetch(`/api/cases/${caseId}/agent/attachments`, {
+      method: 'POST',
+      headers: { 'Content-Type': ATTACHMENT_JSON_TYPE, Accept: 'application/json' },
+      body: JSON.stringify({ images: encodedImages }),
+    });
+    let payload = null;
+    try { payload = await response.json(); } catch { /* 下面按通用错误处理 */ }
+    if (response.status === 401) {
+      location.href = '/login.html';
+      throw new Error('登录状态已失效');
+    }
+    if (!response.ok) {
+      const message = payload?.error || `图片上传失败（HTTP ${response.status}）`;
+      toast('❌ ' + message);
+      throw new Error(message);
+    }
+    const attachments = Array.isArray(payload?.attachments) ? payload.attachments : [];
+    if (
+      attachments.length !== state.draftImages.length
+      || attachments.some((attachment) => !ATTACHMENT_ID_RE.test(attachment?.attachmentId))
+    ) {
+      toast('❌ 图片保存响应不完整，请重试');
+      throw new Error('图片保存响应不完整');
+    }
+    return attachments;
+  }
+
+  function hideCommandMenu() {
+    commandMenu.hidden = true;
+    commandMenu.replaceChildren();
+    state.commandMenuItems = [];
+    state.commandMenuIndex = 0;
+    textarea.setAttribute('aria-expanded', 'false');
+    textarea.removeAttribute('aria-activedescendant');
+  }
+
+  function resetCommandDiscovery() {
+    state.commandGeneration += 1;
+    state.commands = null;
+    state.commandFetch = null;
+    hideCommandMenu();
+  }
+
+  function commandPrefix() {
+    const match = /^\/([a-z0-9_-]*)$/iu.exec(textarea.value);
+    return match ? match[1].toLowerCase() : null;
+  }
+
+  function selectCommandMenuItem(index) {
+    const options = [...commandMenu.querySelectorAll('.agent-command-option')];
+    if (options.length === 0) return;
+    state.commandMenuIndex = (index + options.length) % options.length;
+    options.forEach((option, optionIndex) => {
+      const selected = optionIndex === state.commandMenuIndex;
+      option.classList.toggle('is-selected', selected);
+      option.setAttribute('aria-selected', String(selected));
+    });
+    const selected = options[state.commandMenuIndex];
+    textarea.setAttribute('aria-activedescendant', selected.id);
+    selected.scrollIntoView({ block: 'nearest' });
+  }
+
+  function completeCommand(command) {
+    const suffix = command.input?.hint ? ' ' : '';
+    textarea.value = `/${command.name}${suffix}`;
+    hideCommandMenu();
+    textarea.focus();
+    textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+  }
+
+  function renderCommandMenu() {
+    const prefix = commandPrefix();
+    if (
+      document.activeElement !== textarea
+      || state.draftImages.length > 0
+      || prefix == null
+      || !Array.isArray(state.commands)
+      || state.commands.length === 0
+    ) {
+      hideCommandMenu();
+      return;
+    }
+    const matches = state.commands.filter((command) => command.name.startsWith(prefix));
+    if (matches.length === 0) {
+      hideCommandMenu();
+      return;
+    }
+    state.commandMenuItems = matches;
+    state.commandMenuIndex = 0;
+    const options = matches.map((command, index) => el('button', {
+      id: `agent-command-option-${index}`,
+      class: 'agent-command-option', type: 'button', role: 'option', 'aria-selected': 'false',
+      onmousedown: (event) => event.preventDefault(),
+      onclick: () => completeCommand(command),
+    },
+    el('span', { class: 'agent-command-option-main' },
+      el('span', { class: 'agent-command-name' }, `/${command.name}`),
+      ...(command.input?.hint ? [el('span', { class: 'agent-command-hint' }, command.input.hint)] : []),
+    ),
+    el('span', { class: 'agent-command-description' }, command.description)));
+    commandMenu.replaceChildren(...options);
+    commandMenu.hidden = false;
+    textarea.setAttribute('aria-expanded', 'true');
+    selectCommandMenuItem(0);
+  }
+
+  async function loadCommands() {
+    if (scope === 'global') return [];
+    if (state.commands !== null) return state.commands;
+    if (state.commandFetch) return state.commandFetch;
+    const generation = state.commandGeneration;
+    const request = (async () => {
+      try {
+        const response = await fetch(scope === 'global' ? commandEndpoint : `/api/cases/${caseId}/agent/commands`, {
+          method: 'GET', headers: { Accept: 'application/json' },
+        });
+        // project 档、未运行、未启用等 4xx 都是「本 worker 不呈现命令 UI」；
+        // 不调用 api()，避免用户只是输入普通斜杠文本就收到业务错误 toast。
+        if (response.status >= 400 && response.status < 500) {
+          if (generation === state.commandGeneration) state.commands = [];
+          return [];
+        }
+        if (!response.ok) throw new Error(`command list HTTP ${response.status}`);
+        const payload = await response.json();
+        const commands = Array.isArray(payload?.commands)
+          ? payload.commands.filter((command) => (
+            command
+            && typeof command === 'object'
+            && typeof command.name === 'string'
+            && /^[a-z][a-z0-9_-]*$/u.test(command.name)
+            && typeof command.description === 'string'
+          ))
+          : [];
+        if (generation === state.commandGeneration) state.commands = commands;
+        return commands;
+      } catch {
+        // 5xx/网络故障不冒充「确定为空」：本次不渲染，下一次输入仍可重试。
+        return [];
+      } finally {
+        if (generation === state.commandGeneration) state.commandFetch = null;
+      }
+    })();
+    state.commandFetch = request;
+    return request;
+  }
+
+  async function updateCommandMenu() {
+    if (state.draftImages.length > 0) {
+      hideCommandMenu();
+      return;
+    }
+    if (commandPrefix() == null) {
+      hideCommandMenu();
+      return;
+    }
+    await loadCommands();
+    renderCommandMenu();
+  }
+
+  function renderHistory(items) {
+    if (state.historyLoaded) return;
+    state.historyLoaded = true;
+    for (const item of Array.isArray(items) ? items : []) {
+      if (item?.role === 'user' && (item.text || item.attachments?.length)) {
+        const node = appendUser(item.text || '', item.attachments);
+        if (String(item.origin || '').startsWith('im:')) node.prepend(el('span', { class: 'agent-msg-origin' }, '企业微信'));
+      }
+      else if (item?.role === 'assistant' && item.text) {
+        const node = appendMsg('agent-msg-assistant', '');
+        renderMarkdownInto(node, item.text);
+      } else if (item?.role === 'tool' && item.name) appendToolCall(item.name);
+    }
+  }
+
+  function appendToolCall(name) {
+    clearEmptyHint();
+    const readonly = READONLY_TOOLS.has(name);
+    const kind = name === PROPOSE_TOOL ? '建议（不直接写入）' : (readonly ? '只读' : '写入');
+    const node = el('div', { class: 'agent-msg agent-msg-tool' }, `🔧 ${name} · ${kind}`);
+    logEl.append(node);
+    scrollLogDown();
+  }
+
+  // 从真实的 tool/result data 里取出 anqi_inbox_propose 的 created 字段——
+  // data.message.content[0].content 是工具 render 出来的内容块数组，
+  // renderJson 只产出一个 {type:'text',text:JSON字符串} 块（见
+  // src/agent/assets/plugins/dsh-anqi/index.js 的 renderJson()）。解析失败
+  // （形状不对/非 JSON）一律当作「不是一次成功的建议提交」处理，不抛错。
+  function readProposalCreated(resultData) {
+    try {
+      const blocks = resultData?.message?.content?.[0]?.content;
+      const textBlock = Array.isArray(blocks) ? blocks.find((b) => b?.type === 'text') : null;
+      if (!textBlock?.text) return false;
+      return JSON.parse(textBlock.text)?.created === true;
+    } catch {
+      return false;
+    }
+  }
+
+  function appendProposalNotice() {
+    clearEmptyHint();
+    const node = el('div', { class: 'agent-card agent-card-proposal' },
+      el('div', { class: 'agent-card-title' }, '已提交建议到收件箱'),
+      el('div', {}, '建议不等于批准——是否采纳请在收件箱人工裁决。'),
+      el('div', { class: 'agent-card-actions' },
+        el('a', { class: 'btn small', href: '/#sec-inbox-card', target: '_blank', rel: 'noopener' }, '去收件箱 ↗')
+      )
+    );
+    logEl.append(node);
+    scrollLogDown();
+  }
+
+  function readToolJson(resultData) {
+    try {
+      const blocks = resultData?.message?.content?.[0]?.content;
+      const textBlock = Array.isArray(blocks) ? blocks.find((b) => b?.type === 'text') : null;
+      return textBlock?.text ? JSON.parse(textBlock.text) : null;
+    } catch { return null; }
+  }
+
+  function appendDirectRecord(name, resultData) {
+    const mapping = DIRECT_RECORDS[name];
+    if (!mapping) return;
+    const value = readToolJson(resultData);
+    const item = value?.item;
+    if ((!value?.created && value?.outcome !== 'updated') || !item?.id) return;
+    const caseIdValue = value.case_id == null ? null : Number(value.case_id);
+    const outcomeLabel = value.outcome === 'updated' ? '已更新 · ' : '';
+    const row = el('div', { class: 'agent-round-record' },
+      el('span', {}, `[${value.case_name || '所务'}] ${outcomeLabel}${mapping[1]} · ${String(item.content || item.title || item.name || [item.occurred_on, item.occurred_time, item.location].filter(Boolean).join(' ') || item.role || '').slice(0, 100)}`),
+      ...(caseIdValue ? [el('a', { href: `/case.html?id=${encodeURIComponent(caseIdValue)}`, target: '_blank', rel: 'noopener' }, '打开案件')] : []),
+    );
+    if (value.outcome !== 'updated') {
+      const deletePath = {
+        worklog: '/worklog/', tasks: '/tasks/', events: '/events/', contacts: '/contacts/', facts: '/facts/', deadlines: '/deadlines/',
+      }[mapping[0]];
+      const undo = el('button', { class: 'btn small danger', type: 'button', onclick: async () => {
+        if (mapping[0] === 'events' && !confirm('删除事件会连带影响派生期限，确定撤销？')) return;
+        await api(`${deletePath}${item.id}`, { method: 'DELETE' });
+        row.classList.add('is-revoked');
+        undo.disabled = true; undo.textContent = '已撤销';
+        document.dispatchEvent(new CustomEvent('anjian:changed'));
+      } }, '撤销');
+      row.append(undo);
+    }
+    roundRecords.hidden = false;
+    roundRecords.append(row); scrollLogDown();
+  }
+
+  function removeCard(interactionId) {
+    const card = state.cards.get(interactionId);
+    if (!card) return;
+    card.el.remove();
+    state.cards.delete(interactionId);
+  }
+
+  // 一次性把卡片的动作区替换成一句提示——404（已过期/已消费/已属于另一个
+  // worker）优雅收尾，不留一个点了必失败的死按钮。
+  function settleCard(interactionId, note) {
+    const card = state.cards.get(interactionId);
+    if (!card) return;
+    card.actions.replaceChildren(el('span', { class: 'meta' }, note));
+  }
+
+  async function answerInteraction(interactionId, body, okNote) {
+    try {
+      await api(`/agent/interactions/${interactionId}/answer`, { method: 'POST', body });
+      settleCard(interactionId, okNote);
+      setTimeout(() => removeCard(interactionId), 1200);
+    } catch (e) {
+      // 404（interaction_not_found：过期/已消费/worker 已退出）与其它错误都
+      // 优雅收尾——api() 已经 toast 过服务端 error，这里只负责别留一张死卡片。
+      settleCard(interactionId, e.status === 404 ? '该请求已过期或已处理' : '提交失败');
+      setTimeout(() => removeCard(interactionId), 1600);
+    }
+  }
+
+  function renderApprovalCard(interactionId, toolName, reason, classifierDecision, classifierReason) {
+    if (state.cards.has(interactionId)) return;
+    clearEmptyHint();
+    // 沙箱放宽请求（reason 以 "escalate sandbox to " 开头）每次都要人工确认，
+    // 服务端拒绝把它记成本类放行，这里也不提供该按钮。
+    const escalation = String(reason || '').startsWith('escalate sandbox to ');
+    const actions = el('div', { class: 'agent-card-actions' },
+      el('button', {
+        class: 'btn small ok', type: 'button',
+        onclick: () => answerInteraction(interactionId, { outcome: 'allowed-once' }, '已允许一次'),
+      }, '允许一次'),
+      ...(escalation ? [] : [el('button', {
+        class: 'btn small', type: 'button',
+        onclick: () => answerInteraction(
+          interactionId,
+          { outcome: 'allowed-once', rememberTool: true },
+          '本会话不再询问此类操作',
+        ),
+      }, '本类不再询问')]),
+      el('button', {
+        class: 'btn small danger', type: 'button',
+        onclick: () => answerInteraction(interactionId, { outcome: 'rejected' }, '已拒绝'),
+      }, '拒绝')
+    );
+    const node = el('div', { class: 'agent-card agent-card-approval' },
+      el('div', { class: 'agent-card-title' }, escalation ? '需要授权（放宽沙箱）' : '需要授权'),
+      el('div', {}, `AI 助理请求执行：${toolName || '（未知工具）'}`),
+      ...(classifierDecision ? [el(
+        'div',
+        { class: 'agent-classifier-note' },
+        `智能档裁决：${classifierDecision} · ${classifierReason || '未提供理由'}`,
+      )] : []),
+      el('pre', { class: 'agent-approval-reason' }, reason || '（未提供执行详情，建议拒绝）'),
+      actions
+    );
+    logEl.append(node);
+    state.cards.set(interactionId, { el: node, actions });
+    scrollLogDown();
+  }
+
+  function renderQuestionCard(interactionId, questions) {
+    if (state.cards.has(interactionId)) return;
+    clearEmptyHint();
+    const list = Array.isArray(questions) ? questions : [];
+    // textareas 与 list 按下标一一对应（同一次渲染、同一份数组生成，顺序恒
+    // 定），提交时直接按下标取值，不需要靠 dataset 再反查一遍 DOM。
+    const textareas = list.map(() => el('textarea', { rows: '2', maxlength: String(MAX_ANSWER_CHARS), placeholder: '你的回答……' }));
+    const items = list.map((q, i) => el('div', { class: 'agent-question-item' },
+      el('div', { class: 'agent-question-text' }, q.question || ''),
+      textareas[i]
+    ));
+    const actions = el('div', { class: 'agent-card-actions' },
+      el('button', {
+        class: 'btn small primary', type: 'button',
+        onclick: () => {
+          const answers = list.map((q, i) => ({ id: q.id, text: textareas[i].value.trim() }));
+          if (answers.some((a) => !a.text)) { toast('每道问题都要填答案'); return; }
+          answerInteraction(interactionId, { answers }, '已提交答案');
+        },
+      }, '提交答案')
+    );
+    const node = el('div', { class: 'agent-card agent-card-question' },
+      el('div', { class: 'agent-card-title' }, 'AI 助理有一个问题'),
+      ...items,
+      actions
+    );
+    logEl.append(node);
+    state.cards.set(interactionId, { el: node, actions });
+    scrollLogDown();
+  }
+
+  function applyImageCapability(supportsImages) {
+    // 总入口没有图片通道：无论快照怎么说都不开
+    state.supportsImages = scope !== 'global' && supportsImages === true;
+    attachBtn.hidden = !state.supportsImages;
+    if (!state.supportsImages && state.draftImages.length > 0) clearDraftImages();
+  }
+
+  function applyStatus(status, errorMsg) {
+    const previousStatus = state.status;
+    state.status = status;
+    badge.replaceChildren();
+    badge.className = `chip ${STATUS_CHIP_CLASS[status] || 'c-gray'}`;
+    badge.append(STATUS_LABEL[status] || status || '未知');
+    const isReady = status === 'ready';
+    const isRunning = status === 'running';
+    const canSend = isReady || STARTABLE_STATUSES.has(status);
+    approvalTierSelect.disabled = !['starting', 'ready', 'running'].includes(status);
+    textarea.disabled = !canSend;
+    sendBtn.disabled = !canSend || state.submitting;
+    attachBtn.disabled = !canSend || state.submitting;
+    fileInput.disabled = !canSend || state.submitting;
+    stopBtn.disabled = !isRunning;
+    if (
+      (status === 'starting' && previousStatus !== 'starting')
+      || (status === 'ready' && !['ready', 'running'].includes(previousStatus))
+      || ['disabled', 'stopped', 'error', 'crashed'].includes(status)
+    ) {
+      resetCommandDiscovery();
+    } else if (!canSend) {
+      hideCommandMenu();
+    }
+    if (errorMsg) appendSystem(`⚠ ${errorMsg}`);
+  }
+
+  // 首帧/重连快照：disabled 时形状只有 {status,caseId,error}；否则是完整
+  // publicStatus() 投影（含 pendingInteractions），把已经在等待应答的
+  // approval/question 卡片一并补渲染出来。
+  function applySnapshot(data) {
+    applyImageCapability(data.supportsImages);
+    applyStatus(data.status, data.error);
+    if (['1', '2', '3'].includes(data.approvalTier)) {
+      approvalTierSelect.value = data.approvalTier;
+      approvalTierSelect.dataset.saved = data.approvalTier;
+    }
+    renderHistory(data.history);
+    for (const item of data.pendingInteractions || []) {
+      if (item.type === 'approval') renderApprovalCard(
+        item.id,
+        item.toolName,
+        item.reason,
+        item.classifierDecision,
+        item.classifierReason,
+      );
+      else if (item.type === 'question') renderQuestionCard(item.id, item.questions);
+    }
+  }
+
+  approvalTierSelect.addEventListener('change', async () => {
+    const previous = approvalTierSelect.dataset.saved || '1';
+    approvalTierSelect.disabled = true;
+    try {
+      const result = await api(`${apiAgentPath}/approval-tier`, {
+        method: 'POST', body: { approvalTier: approvalTierSelect.value },
+      });
+      approvalTierSelect.value = result.approvalTier;
+      approvalTierSelect.dataset.saved = result.approvalTier;
+      appendSystem(`审批档位已切换为 ${result.approvalTier} 档`);
+    } catch {
+      approvalTierSelect.value = previous;
+    } finally {
+      approvalTierSelect.disabled = !['starting', 'ready', 'running'].includes(state.status);
+    }
+  });
+
+  function connectSSE() {
+    if (state.connected) return;
+    state.connected = true;
+    const es = new EventSource(`${agentPath}/events`);
+    state.es = es;
+
+    es.addEventListener('status', (e) => {
+      const data = JSON.parse(e.data);
+      // 纵深防御：真实 status 首帧是 supervisor.publicStatus() 的原始投影，
+      // 顶层从不带 origin 字段（origin 只出现在 {origin,data} 包一层的
+      // tool/*、assistant/* 等事件里）。服务端已经把子进程 session.event 撞
+      // 上保留事件名的情形重写成 wire/<type>（见 src/routes/agent.js），这里
+      // 独立于服务端再核验一次：一旦收到的 status 帧顶层带 origin，视为 wire
+      // 一侧的伪造/异常帧，直接丢弃，不喂给 applySnapshot()。
+      if (data.origin) return;
+      applySnapshot(data);
+    });
+    es.addEventListener('worker/ready', () => { applyStatus('ready'); appendSystem('AI 助理已就绪'); });
+    es.addEventListener('turn/start', (e) => { const frame = JSON.parse(e.data); applyStatus('running'); if (String(frame.data?.origin || '').startsWith('im:')) appendSystem('企业微信发来一条消息，AI 正在处理'); });
+    es.addEventListener('turn/end', (e) => {
+      const data = JSON.parse(e.data).data || {};
+      if (state.currentBubble) {
+        state.currentBubble.classList.remove('is-streaming');
+        state.currentBubble = null;
+        state.currentBubbleText = '';
+      }
+      if (data.outcome === 'completed') applyStatus('ready');
+      else appendSystem('本轮出错，正在收尾……');
+    });
+    es.addEventListener('worker/exit', (e) => {
+      const data = JSON.parse(e.data).data || {};
+      applyStatus(data.status, null);
+      // worker 退出后，任何还没收到 tool/result 的 pendingToolCalls 记录都成了
+      // 孤儿（旧 worker 的 callId 命名空间已经结束）——清空，避免残留条目
+      // 无限增长，也避免下次重启后的新 worker 若恰好复用了同一个 callId 字面
+      // 值时被错配到上一任 worker 遗留的工具名。
+      state.pendingToolCalls.clear();
+      state.pendingCommands.clear();
+      appendSystem(`AI 助理已停止${data.detail ? '：' + data.detail : ''}`);
+    });
+    es.addEventListener('assistant/chunk', (e) => {
+      const data = JSON.parse(e.data).data || {};
+      const chunk = data.chunk;
+      if (!chunk || chunk.type !== 'text-delta' || !chunk.text) return;
+      if (!state.currentBubble) {
+        state.currentBubble = appendMsg('agent-msg-assistant is-streaming', '');
+        state.currentBubbleText = '';
+      }
+      state.currentBubbleText += chunk.text;
+      renderMarkdownInto(state.currentBubble, state.currentBubbleText);
+      scrollLogDown();
+    });
+    es.addEventListener('assistant/message', (e) => {
+      const data = JSON.parse(e.data).data || {};
+      const blocks = data.message?.content;
+      const text = Array.isArray(blocks)
+        ? blocks.filter((b) => b?.type === 'text').map((b) => b.text || '').join('')
+        : '';
+      if (!text) return;
+      if (!state.currentBubble) state.currentBubble = appendMsg('agent-msg-assistant', '');
+      state.currentBubble.classList.remove('is-streaming');
+      renderMarkdownInto(state.currentBubble, text);
+      state.currentBubble = null;
+      state.currentBubbleText = '';
+      scrollLogDown();
+    });
+    es.addEventListener('tool/call', (e) => {
+      const frame = JSON.parse(e.data);
+      if (frame.origin !== 'wire') return;
+      const { callId, name } = frame.data || {};
+      if (!name) return;
+      if (callId != null) state.pendingToolCalls.set(callId, name);
+      appendToolCall(name);
+    });
+    es.addEventListener('tool/result', (e) => {
+      const frame = JSON.parse(e.data);
+      if (frame.origin !== 'wire') return;
+      const data = frame.data || {};
+      const callId = data.message?.content?.[0]?.toolCallId;
+      const name = callId != null ? state.pendingToolCalls.get(callId) : undefined;
+      if (callId != null) state.pendingToolCalls.delete(callId);
+      if (name === PROPOSE_TOOL && readProposalCreated(data)) appendProposalNotice();
+      appendDirectRecord(name, data);
+    });
+    es.addEventListener('command/run', (e) => {
+      const frame = JSON.parse(e.data);
+      if (frame.origin !== 'wire') return;
+      const { commandId, name } = frame.data || {};
+      if (typeof commandId !== 'string' || typeof name !== 'string' || !name) return;
+      state.pendingCommands.set(commandId, name);
+      appendSystem(`命令开始：/${name}`);
+    });
+    es.addEventListener('command/done', (e) => {
+      const frame = JSON.parse(e.data);
+      if (frame.origin !== 'wire') return;
+      const { commandId, kind, text } = frame.data || {};
+      if (typeof commandId !== 'string' || !['success', 'error'].includes(kind)) return;
+      const name = state.pendingCommands.get(commandId);
+      state.pendingCommands.delete(commandId);
+      const label = name ? `：/${name}` : '';
+      const detail = typeof text === 'string' && text ? `\n${text}` : '';
+      appendSystem(`${kind === 'success' ? '命令完成' : '命令失败'}${label}${detail}`);
+    });
+    es.addEventListener('interaction/pending', (e) => {
+      const data = JSON.parse(e.data).data || {};
+      if (data.type === 'approval') renderApprovalCard(
+        data.interactionId,
+        data.toolName,
+        data.reason,
+        data.classifierDecision,
+        data.classifierReason,
+      );
+      else if (data.type === 'question') renderQuestionCard(data.interactionId, data.questions);
+    });
+    es.addEventListener('interaction/expired', (e) => {
+      const data = JSON.parse(e.data).data || {};
+      settleCard(data.interactionId, '该请求已过期');
+      setTimeout(() => removeCard(data.interactionId), 1600);
+    });
+    es.onerror = () => { /* EventSource 自己会重连，不额外处理——重连后会再收一次 status 首帧 */ };
+  }
+
+  // 停靠 vs 悬浮：≥1100px 视口把面板停靠在右侧——body 挂 agent-docked 让主体
+  // 和快录条让位（CSS 见 A-26c），无遮罩，左侧工作台可同时操作；更窄视口回落
+  // 原有的遮罩悬浮层。JS 是唯一状态源：CSS 的 body.agent-docked 规则不带媒体
+  // 查询，靠这里的 matchMedia 监听保证只在宽视口挂类。
+  const dockMedia = window.matchMedia('(min-width: 1100px)');
+  const DOCK_KEY = 'agent-dock-open';
+
+  function applyLayout() {
+    if (drawer.hidden) {
+      document.body.classList.remove('agent-docked');
+      backdrop.hidden = true;
+      return;
+    }
+    const docked = dockMedia.matches;
+    document.body.classList.toggle('agent-docked', docked);
+    backdrop.hidden = docked;
+  }
+
+  function openDrawer() {
+    drawer.hidden = false; drawer.setAttribute('aria-hidden', 'false');
+    applyLayout();
+    try { localStorage.setItem(DOCK_KEY, '1'); } catch { /* 隐私模式等存不了就不记 */ }
+    loadProjects();
+    connectSSE();
+    scrollLogDown();
+  }
+  function closeDrawer() {
+    hideCommandMenu();
+    drawer.hidden = true; drawer.setAttribute('aria-hidden', 'true');
+    applyLayout();
+    try { localStorage.removeItem(DOCK_KEY); } catch { /* 同上 */ }
+  }
+  // 入口按钮（mountEntry）是开关：面板停靠后左侧仍可操作，得有一个不进面板也能关它的地方
+  closeBtn.addEventListener('click', closeDrawer);
+  backdrop.addEventListener('click', closeDrawer);
+  // Escape 只在悬浮（遮罩）模式关面板：停靠时人在左侧工作台里正常用 Escape
+  //（关日期弹层、收折叠），不该顺手把助理面板一起带走
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !drawer.hidden && !dockMedia.matches) closeDrawer(); });
+  dockMedia.addEventListener('change', applyLayout);
+
+  attachBtn.addEventListener('click', () => {
+    if (state.supportsImages && !state.submitting) fileInput.click();
+  });
+  fileInput.addEventListener('change', () => {
+    addDraftFiles(fileInput.files || []);
+    fileInput.value = '';
+  });
+  textarea.addEventListener('paste', (event) => {
+    if (!state.supportsImages || state.submitting) return;
+    const files = [...(event.clipboardData?.items || [])]
+      .filter((item) => item.kind === 'file')
+      .map((item) => item.getAsFile())
+      .filter(Boolean);
+    if (files.length === 0) return;
+    event.preventDefault();
+    addDraftFiles(files);
+  });
+  textarea.addEventListener('input', () => { updateCommandMenu(); });
+  textarea.addEventListener('keydown', (event) => {
+    if (commandMenu.hidden) return;
+    if (event.key === 'ArrowDown') {
+      event.preventDefault();
+      selectCommandMenuItem(state.commandMenuIndex + 1);
+    } else if (event.key === 'ArrowUp') {
+      event.preventDefault();
+      selectCommandMenuItem(state.commandMenuIndex - 1);
+    } else if (event.key === 'Tab') {
+      const selected = state.commandMenuItems[state.commandMenuIndex];
+      if (!selected) return;
+      event.preventDefault();
+      completeCommand(selected);
+    } else if (event.key === 'Escape') {
+      event.preventDefault();
+      event.stopPropagation();
+      hideCommandMenu();
+    }
+  });
+  textarea.addEventListener('blur', hideCommandMenu);
+
+  // 上次离开时面板是开着的 → 宽视口下自动恢复停靠。这会立即建 SSE，与顶部
+  // 「懒建连接」的初衷不冲突：那是防「谁都没点过抽屉的标签页」空转长连接，
+  // 而这里是用户明确留着面板没关——关掉面板即清除记忆，不会再自动连。
+  let restoreOpen = false;
+  try { restoreOpen = localStorage.getItem(DOCK_KEY) === '1'; } catch { /* 读不了当没记过 */ }
+  if (restoreOpen && dockMedia.matches) openDrawer();
+
+  stopBtn.addEventListener('click', async () => {
+    stopBtn.disabled = true;
+    try {
+      await api(`${apiAgentPath}/cancel`, { method: 'POST' });
+      appendSystem('已请求停止');
+    } catch { /* api() 已经 toast 过错误 */ }
+    finally { stopBtn.disabled = false; }
+  });
+
+  promptForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const text = textarea.value.trim();
+    if (!text && state.draftImages.length === 0) return;
+    if (state.draftImages.length > 0 && !state.supportsImages) {
+      toast('当前模型不支持图片，请切换到名称含 vision 的模型');
+      return;
+    }
+    hideCommandMenu();
+    const statusBeforeSubmit = state.status;
+    // 发送期间锁定项目：prompt 一律发往点「发送」那一刻的项目，哪怕中途被程序切走
+    const submitScope = scope;
+    const submitCaseId = caseId;
+    const submitPath = apiAgentPath;
+    const sameProject = () => submitScope === scope && submitCaseId === caseId;
+    state.submitting = true;
+    projectSelect.disabled = true;
+    renderImageDrafts();
+    sendBtn.disabled = true;
+    attachBtn.disabled = true;
+    fileInput.disabled = true;
+    try {
+      if (STARTABLE_STATUSES.has(state.status)) {
+        // 案件旧契约：STARTABLE_STATUSES.has(state.status) → /agent/start → /agent/prompt；
+        // 实际端点由 agentPath 按 scope 组合，保留该顺序供静态回归审查。
+        applyStatus('starting');
+        const snapshot = await api(`${submitPath}/start`, { method: 'POST' });
+        if (sameProject()) applySnapshot(snapshot);
+      }
+      const attachments = await uploadDraftImages();
+      const attachmentIds = attachments.map((attachment) => attachment.attachmentId);
+      // image contract: /agent/prompt` carries attachmentIds only; base64 stays in admission upload.
+      const casePromptEndpoint = `/cases/${submitCaseId}/agent/prompt`;
+      const promptEndpoint = submitScope === 'global' ? '/agent/global/prompt' : casePromptEndpoint;
+      await api(promptEndpoint, { method: 'POST', body: submitScope === 'global' ? { text } : { text, attachmentIds } });
+      if (sameProject()) appendUser(text, attachments);
+      textarea.value = '';
+      clearDraftImages();
+    } catch {
+      // 自动启动失败时恢复原可发送终态，让律师修正配置后可以直接重试；不能
+      // 把抽屉永久卡在本地伪造的 starting（服务端其实没有 live worker）。
+      if (sameProject() && state.status === 'starting') applyStatus(statusBeforeSubmit);
+      // api() 已经 toast 过错误，这里不重复。
+    }
+    finally {
+      state.submitting = false;
+      projectSelect.disabled = false;
+      renderImageDrafts();
+      applyStatus(state.status);
+    }
+  });
+  const submitExternalPrompt = (value) => {
+    if (!value) return;
+    if (drawer.hidden) openDrawer();
+    textarea.value = value;
+    promptForm.requestSubmit();
+  };
+  document.addEventListener('anjian:agent-prompt', (event) => {
+    const value = String(event.detail?.text ?? event.detail ?? '').trim();
+    submitExternalPrompt(value);
+  });
+  // 快录条「→ 目标」小字点击：只开抽屉，让用户在标题栏换项目
+  document.addEventListener('anjian:agent-open', () => { if (drawer.hidden) openDrawer(); });
+
+  return { mountEntry, switchProject, open: openDrawer, close: closeDrawer };
+}
+
+// 案件页入口：本页案件 = 默认项目（不写 sessionStorage 记忆）。pageCaseId 必须在任何
+// await 之前同步写入，这样即便全局入口的创建先开始，也会在读取默认项目时看到它。
+export async function mountAgentDrawer(caseId) {
+  const id = Number(caseId);
+  if (!Number.isInteger(id)) return undefined;
+  pageCaseId = id;
+  if (!sharedCreation) sharedCreation = createAgentDrawer();
+  const controller = await sharedCreation;
+  if (!controller) return undefined;
+  controller.mountEntry('agent-entry-slot', 'case', id);
+  controller.switchProject('case', id);
+  return controller;
+}
+
+// 顶栏入口：同一个抽屉实例。案件页上默认项目仍是本案（pageCaseId 优先）。
+export async function mountGlobalAgentDrawer() {
+  if (!sharedCreation) sharedCreation = createAgentDrawer();
+  const controller = await sharedCreation;
+  controller?.mountEntry('agent-global-entry-slot', 'global', null);
+  return controller;
+}

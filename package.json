@@ -1,0 +1,145 @@
+{
+  "name": "anjian",
+  "version": "2.12.9",
+  "private": true,
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "main": "electron/main.js",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --env-file=.env server.js",
+    "seed": "node tools/seed-demo.js",
+    "check": "npm run rebuild:node && bash tools/check.sh",
+    "qa:finance": "bash tools/run-finance-ui-qa.sh",
+    "rebuild:node": "npm rebuild better-sqlite3",
+    "agent:update-runtime": "node tools/update-dsh-runtime.mjs",
+    "electron:rebuild": "electron-rebuild -f -w better-sqlite3",
+    "icon:build": "bash tools/build-icon.sh",
+    "electron:dev": "npm run electron:rebuild && electron .",
+    "dist": "node build/build-ocr-helper.mjs && npm run electron:rebuild && node build/ensure-cross-arch-optional-deps.mjs && electron-builder --mac",
+    "dist:win": "npm run electron:rebuild && electron-builder --win nsis --x64 --publish never"
+  },
+  "build": {
+    "appId": "asia.fdonglawyer.anjian",
+    "productName": "案齐",
+    "artifactName": "anqi-${version}-${arch}.${ext}",
+    "directories": {
+      "output": "dist-electron"
+    },
+    "files": [
+      "server.js",
+      "src/**",
+      "!archive/**",
+      "!src/agent/runtime/**",
+      "!src/agent/assets/**",
+      "public/**",
+      "rules/**",
+      "tools/**",
+      "electron/**",
+      "LICENSE",
+      "LICENSES/**",
+      "ACKNOWLEDGEMENTS.md",
+      "LEGAL-NOTICE.md",
+      "package.json",
+      "package-lock.json"
+    ],
+    "asar": false,
+    "asarUnpack": [
+      "**/*.node"
+    ],
+    "extraResources": [
+      {
+        "from": "src/agent",
+        "to": "agent-runtime",
+        "filter": [
+          "runtime{,/**/*}",
+          "assets{,/**/*}",
+          "!assets/node_modules{,/**/*}"
+        ]
+      }
+    ],
+    "afterPack": "build/afterpack-agent-runtime-link.cjs",
+    "afterSign": "build/adhoc-sign.cjs",
+    "copyright": "Copyright © 2026 方律",
+    "mac": {
+      "extraResources": [
+        {
+          "from": "build/bin/anqi-ocr",
+          "to": "bin/anqi-ocr"
+        }
+      ],
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        }
+      ],
+      "category": "public.app-category.business",
+      "icon": "build/icon.icns",
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false
+    },
+    "win": {
+      "icon": "build/icon.ico",
+      "artifactName": "anqi-${version}-windows-${arch}.${ext}",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": ["x64"]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    },
+    "dmg": {
+      "title": "ANQI ${version}",
+      "icon": "build/icon.icns",
+      "contents": [
+        {
+          "x": 130,
+          "y": 220
+        },
+        {
+          "x": 410,
+          "y": 220,
+          "type": "link",
+          "path": "/Applications"
+        }
+      ]
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "zj-ai-lab",
+      "repo": "anqi"
+    }
+  },
+  "dependencies": {
+    "@wecom/aibot-node-sdk": "1.0.7",
+    "better-sqlite3": "^13.0.3",
+    "electron-updater": "^6.8.9",
+    "express": "^5.3.0",
+    "unpdf": "1.8.1"
+  },
+  "devDependencies": {
+    "@electron/rebuild": "^4.2.0",
+    "electron": "^43.7.5",
+    "electron-builder": "^26.15.7",
+    "minimatch": "^11.0.4"
+  },
+  "allowScripts": {
+    "electron@43.7.5": true,
+    "better-sqlite3@13.0.3": true,
+    "electron-winstaller": false
+  }
+}

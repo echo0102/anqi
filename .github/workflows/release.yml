@@ -1,0 +1,247 @@
+# 案齐 macOS 发行：v* tag 发布到 GitHub Release；workflow_dispatch 固定为 dry-run。
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "固定为 true：只构建并上传 Actions artifact"
+        required: true
+        default: true
+        type: boolean
+
+permissions: {}
+
+jobs:
+  build:
+    runs-on: macos-latest
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Require dry-run for manual dispatch
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          REQUESTED_DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          test "$REQUESTED_DRY_RUN" = "true" || {
+            echo "FATAL: workflow_dispatch 永远只允许 dry-run"
+            exit 1
+          }
+
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Resolve and verify version
+        id: version
+        run: |
+          set -euo pipefail
+          PKG_VER=$(node -p "require('./package.json').version")
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            TAG_VER="${GITHUB_REF_NAME#v}"
+            [ "$TAG_VER" = "$PKG_VER" ] || {
+              echo "FATAL: tag $TAG_VER != package.json $PKG_VER"
+              exit 1
+            }
+          fi
+          echo "version=$PKG_VER" >> "$GITHUB_OUTPUT"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install AI 助理 runtime 依赖
+        # src/agent/runtime 是一个独立的 npm 包根（@anqi/agent-runtime），根
+        # package.json 没有 workspaces，根 npm ci 永远装不到它——但
+        # package.json 的 build.extraResources 会把这整棵目录（含
+        # node_modules）随包分发进 DMG，src/agent/supervisor.js 打包模式下
+        # 直接从这里 spawn DSH 子进程（assets/bin.mjs 加载
+        # runtime/node_modules/@deepseek-ai/dsh-app-boot/lib/index.js）。
+        # 这一步不装，electron-builder 不会报错（extraResources 的 filter 只
+        # 是少匹配到文件），发行版里 AI 助理会是一个含义不明的 crashed
+        # worker——下面的 "Verify agent runtime bundled in DMG" 步骤专门核验
+        # 这一步确实生效，不依赖这里"跑了就一定对"。
+        # --ignore-scripts：与主 package.json 的 allowScripts 惯例一致，这棵
+        # 依赖树里没有任何脚本需要在 CI 里跑。
+        working-directory: src/agent/runtime
+        run: npm ci --ignore-scripts
+
+      - name: 补装 AI 助理 runtime 的跨架构原生依赖
+        # sharp/koffi 是按宿主 os/cpu 挑选的 optionalDependencies——上一步的
+        # npm ci 跑在 macos-latest（arm64）runner 上，只装出 darwin-arm64 的
+        # 原生二进制。但 build.extraResources 把这同一棵 node_modules 原样
+        # 复制进 arm64、x64 两个 DMG（electron-builder 不按目标架构筛选
+        # extraResources），x64 DMG 里因此没有 darwin-x64 的 sharp/koffi——
+        # AI 助理常挂插件 attachment-local 顶层 `import sharp`（非懒加载），
+        # Intel Mac 用户一开启 AI 助理就崩：
+        # `Error: Could not load the "sharp" module using the darwin-x64
+        # runtime`（本仓库审查记录里用真实 x64 Helper + Rosetta 复现过）。
+        # 这一步把宿主 npm ci 没装的那一侧原生包按 package-lock.json 记录的
+        # resolved tarball URL + integrity 摘要补装进同一棵 node_modules，
+        # 两侧共存——sharp/koffi 运行时都是按 process.platform/process.arch
+        # 挑选对应二进制（见 build/ensure-cross-arch-optional-deps.mjs 顶部
+        # 注释与本机实测），共存不会造成加载歧义，也不依赖 `npm install
+        # --os= --cpu=`（实测那条路径会把两个架构当同一虚拟 slot 的互斥变体，
+        # 装一个会删掉另一个，无法共存）。
+        run: node build/ensure-cross-arch-optional-deps.mjs
+
+      - name: Build arm64 and x64 DMGs
+        run: npm run dist -- --publish never
+
+      - name: Verify agent runtime bundled in DMG
+        # electron-builder 对 extraResources 里 node_modules 的静默跳过坑
+        # （见 tools/test-pack-manifest.js 顶部大段注释）只有真正打包才会
+        # 现形——这里对两个架构的打包产物各做一次机械核验：DSH 的可执行入口
+        # 必须真的落在 Contents/Resources/agent-runtime/runtime/node_modules
+        # 下，而不是 build.extraResources"复制成功"但内容为空；同时核验每个
+        # 架构自己的 sharp/koffi/ripgrep/node-addon-system 原生二进制确实存在——只核验目录
+        # （旧版本用 test -d）或 bin.js/符号链接存在会漏检"目录还在、里面的
+        # 原生二进制文件没了"这种半成品（例如 extraResources 复制中断、或
+        # ensure-cross-arch-optional-deps.mjs 补装失败但留下空目录），必须
+        # 直接断言二进制文件本身存在，才是"跨架构补装是否真的生效"的证据，
+        # 不是重复上面那步。
+        run: |
+          set -euo pipefail
+          # 不用关联数组（declare -A）：这个 job 跑在 macos-latest，`run:`
+          # 步骤未显式声明 shell 时走系统 /bin/bash——GitHub 的 macOS 镜像至今
+          # 仍是 Apple 出于 GPLv3 许可顾虑锁在的 3.2.57（同一个坑，下面 publish
+          # job 的注释也提过），不支持 bash 4 才有的关联数组，`declare -A`
+          # 在这个 shell 下会直接 `declare: -A: invalid option` 报错。用
+          # case 语句代替一次性的字面量映射，bash 3.2 完全兼容；下面的
+          # sharp_native 通配符核验同样用 bash 3.2 的默认（非 nullglob）行为
+          # 手工验证过：匹配不到文件时通配符保持字面量，test -f 对着一个不
+          # 存在的字面量路径求值为假，不需要 shopt -s nullglob。
+          for outdir in mac-arm64 mac; do
+            case "$outdir" in
+              mac-arm64) arch=arm64 ;;
+              mac) arch=x64 ;;
+              *) echo "FATAL: 未知的 outdir $outdir"; exit 1 ;;
+            esac
+            resources="dist-electron/${outdir}/案齐.app/Contents/Resources"
+            bin="${resources}/agent-runtime/runtime/node_modules/@deepseek-ai/dsh-app-boot/lib/index.js"
+            link="${resources}/agent-runtime/assets/node_modules"
+            sharp_native="${resources}/agent-runtime/runtime/node_modules/@img/sharp-darwin-${arch}"
+            ripgrep_native="${resources}/agent-runtime/runtime/node_modules/@vscode/ripgrep-darwin-${arch}"
+            system_native="${resources}/agent-runtime/runtime/node_modules/@deepseek-ai/node-addon-system-darwin-${arch}"
+            test -f "$bin" || {
+              echo "FATAL: $bin 不存在——AI 助理 runtime 依赖未被打包进 ${outdir} 产物"
+              exit 1
+            }
+            test -L "$link" || {
+              echo "FATAL: $link 不是符号链接——build/afterpack-agent-runtime-link.cjs 是否未生效？"
+              exit 1
+            }
+            test -f "$sharp_native"/lib/sharp-darwin-${arch}-*.node || {
+              echo "FATAL: ${sharp_native}/lib 下没有 sharp-darwin-${arch}-*.node——${outdir}（${arch}）产物里没有匹配架构的 sharp 原生模块，AI 助理常挂插件 attachment-local 一加载就会崩（见 build/ensure-cross-arch-optional-deps.mjs 是否被跳过或失效）"
+              exit 1
+            }
+            # DSH 0.2.x 起上游不再把 @koromix/koffi-darwin-* 提升到顶层，每个
+            # 依赖它的 DSH 包在 node_modules 里自带一份嵌套拷贝。核验两侧：
+            # 每一侧都至少要有一个嵌套二进制，且 arm64/x64 侧数量一致——数量
+            # 一致说明补装脚本把嵌套位置逐个补齐了；只补一侧时 Intel Mac 上
+            # dsh-fs-local 等常挂包会加载失败。
+            koffi_root="${resources}/agent-runtime/runtime/node_modules"
+            koffi_arm=$(find "$koffi_root" -path "*@koromix/koffi-darwin-arm64/darwin_arm64/koffi.node" 2>/dev/null | wc -l | tr -d ' ')
+            koffi_x64=$(find "$koffi_root" -path "*@koromix/koffi-darwin-x64/darwin_x64/koffi.node" 2>/dev/null | wc -l | tr -d ' ')
+            if [ "$koffi_arm" -lt 1 ] || [ "$koffi_arm" != "$koffi_x64" ]; then
+              echo "FATAL: ${outdir}（${arch}）产物里嵌套 koffi 原生模块缺失或两架构数量不一致（arm64=${koffi_arm} x64=${koffi_x64}）——0.2.x 起 koffi-darwin-* 嵌套在各 DSH 包下，两架构必须逐位置共存（见 build/ensure-cross-arch-optional-deps.mjs 是否被跳过或失效）"
+              exit 1
+            fi
+            test -f "$ripgrep_native/bin/rg" || {
+              echo "FATAL: $ripgrep_native/bin/rg 不存在——${outdir}（${arch}）产物里没有匹配架构的 ripgrep 二进制，dsh-tool-fs-search 会在文件搜索时失败（见 build/ensure-cross-arch-optional-deps.mjs 是否被跳过或失效）"
+              exit 1
+            }
+            test -f "$system_native/bin/system.node" || {
+              echo "FATAL: $system_native/bin/system.node 不存在——${outdir}（${arch}）产物里没有匹配架构的 node-addon-system 原生模块，常挂插件 session-persistence-jsonl 打开会话时的 flock 会失败（见 build/ensure-cross-arch-optional-deps.mjs 是否被跳过或失效）"
+              exit 1
+            }
+          done
+
+      - name: Verify artifacts and generate SHA-256
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          cd dist-electron
+          for arch in arm64 x64; do
+            dmg="anqi-${VERSION}-${arch}.dmg"
+            test -f "$dmg"
+            test -f "$dmg.blockmap"
+            shasum -a 256 "$dmg" > "$dmg.sha256"
+            shasum -a 256 -c "$dmg.sha256"
+            grep -Fq "url: $dmg" latest-mac.yml
+          done
+          test -f latest-mac.yml
+
+      - name: Upload macOS dry-run artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: macos-release-${{ steps.version.outputs.version }}
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            dist-electron/anqi-*.dmg
+            dist-electron/anqi-*.dmg.blockmap
+            dist-electron/anqi-*.dmg.sha256
+            dist-electron/latest-mac.yml
+
+  publish:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download verified macOS artifacts
+        uses: actions/download-artifact@v8
+        with:
+          name: macos-release-${{ needs.build.outputs.version }}
+          path: release
+
+      - name: Publish GitHub Release assets
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          set -euo pipefail
+          files=(release/*)
+          # 语义化版本的预发行段（形如 2.7.0-beta.1、2.7.0-rc.1，MAJOR.MINOR.PATCH
+          # 之后紧跟一个 "-"）一律标成 GitHub 的 prerelease——不加这个标记时
+          # `gh release create` 默认创建的是普通（非预发行）Release，
+          # electron/updater.js 走的 GitHub provider 会把它当成最新版推给全部
+          # 现网用户升级，等于把 beta/rc 当稳定版发布。这里只用一次正则识别，
+          # 不依赖开发者在打 tag 时手动记得加 --prerelease。
+          # 用普通字符串（而不是数组）装这个可选 flag——数组在空时展开
+          # "${arr[@]}" 在旧版 bash（例如 macOS 系统自带的 3.2，虽然这个 job
+          # 固定跑在 ubuntu-latest，但不依赖 runner 具体 bash 版本更稳妥）
+          # 配合 `set -u` 会报 "unbound variable"；空字符串变量本身没有这个
+          # 坑，未加引号展开在这里安全（值只可能是空或字面量 "--prerelease"，
+          # 不含空格/glob 特殊字符）。
+          prerelease_flag=""
+          if [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+-.+ ]]; then
+            prerelease_flag="--prerelease"
+            echo "版本 $VERSION 带预发行段，本次发布将标记为 GitHub prerelease"
+          fi
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" "${files[@]}" \
+              --repo "$GITHUB_REPOSITORY" --clobber
+            # 已存在的 Release（例如失败重跑）也要同步 prerelease 状态，不能
+            # 只在首次创建时生效。
+            if [ -n "$prerelease_flag" ]; then
+              gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --prerelease
+            fi
+          else
+            gh release create "$GITHUB_REF_NAME" "${files[@]}" \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "案齐 ANQI $VERSION" \
+              --generate-notes \
+              $prerelease_flag
+          fi

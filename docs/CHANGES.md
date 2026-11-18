@@ -1,0 +1,815 @@
+# 案齐 ANQI · 变更史
+
+> 本文件记录公开产品、数据模型与设计决策的演进。当前可运行版本以 `package.json.version` 为唯一事实源；标为「未发布」的条目描述工作树中的下一版准备，不代表已有 tag、Release、镜像或任何实例升级。
+>
+> 私有部署坐标、生产数据计数、备份路径、CI run 编号和逐机上线记录不属于公开 changelog，已从本文件移除。公开发行流程见 [RELEASING.md](RELEASING.md)。
+
+## 版本速查
+
+| 版本 | 日期 | 要点 |
+|---|---|---|
+| **2.12.9** | 2026-11-12 | AI 助理运行时升级 DSH 0.2.2-rc.2 对齐上游（170 包同版钉死）：preset 体系迁 registry+声明行、`{{cwd}}` 变量移除后 persona 改写、显式 tool-executor、workflow 换 PTC、第三方插件 patch 改重启 worker 生效；Node 底线 24.9（Electron 内嵌满足）；无 migration、无新环境变量。 |
+| **2.12.8** | 2026-11-11 | 律师费作废：收过款又撤销了收款、确实不再收取的款项可以「作废」（类比发票冲红后作废），退出待收与逾期统计、保留款项与全部结算记录、带原因、可撤回；撤销收款时可一步勾选作废；无 migration。 |
+| **2.12.7** | 2026-11-11 | 手动记的分成不论状态都能「更正」或「删」，结算遇到手动记录重叠时列出冲突并给出两种处理办法，系统结算的分成可从台账行直达「修改结算」；macOS 桌面版可在菜单「案件文件夹位置…」把案件夹指到已有的案卷总文件夹（不搬文件）；期限 / 开庭跨页点击直达案件时间线那一条；依赖补丁升级；无 migration。 |
+| **2.12.6** | 2026-11-02 | 案件时间线的开庭 / 程序事件、工作日志、期限可直接「编辑」内容（此前只能改日期）；改送达方式与改日期一样先预览派生期限重算、确认后才落库（修正只改送达方式不重算的缺口）；无 migration。 |
+| **2.12.5** | 2026-11-02 | 待办点标题或行空白处即可打开弹层编辑标题 / 优先级 / 日期 / 备注；待办与期限「完成 / 放弃」后 5 秒内可撤销；已结期限可在案件时间线恢复、已完成待办可重新打开；无 migration。 |
+| **2.12.4** | 2026-10-27 | 文件桥不再排队 json 工作流元数据（LegalRAG 类型白名单本就不收，排队必失败）；存量 json 行建议一次性置 `ignored`；无 migration。 |
+| **2.12.3** | 2026-10-27 | 修复 LegalRAG 文件桥自 2.7.0-beta.3 起注册一律 404 导致新文件全部「处理失败」的问题（注册案件名回落合法目录名）；无 migration。 |
+| **2.12.2** | 2026-10-15 | 桌面日历鼠标单击待办（单日、跨天长条、未排期托盘）能打开弹层了；手机快录条按钮与输入框达 44px 触控高度；弹层统一键盘操作（Esc、Tab 循环、焦点归还）与控件尺寸令牌；纯前端，无 migration。 |
+| **2.12.1** | 2026-10-14 | AI 助理记程序事件时看得见全部合法事件类型（总入口与案件助理），不再猜 id 后退回记待办；服务端校验不变，无 migration。 |
+| **2.12.0** | 2026-10-14 | 企业微信智能机器人 API/WebSocket 长连接、本人绑定与入站 AI 总入口、提醒外发（默认模拟）、migration 032 与设置面板。 |
+| **2.11.0** | 2026-10-13 | AI 总入口与一句话拆多条、服务端本地认案与 session 授权、AI 工作日志标记、migration 031；顶栏入口与快录「交给 AI」；案件联系人与资金账本界面一致性收口。 |
+| **2.10.0** | 2026-10-12 | 确定性提醒中枢、应用内原生通知、migration 030；自动档位随开庭/期限/带时刻待办对账，支持人工提醒与 SSE 补发。 |
+| **2.9.4** | 2026-10-12 | 修复 2.9.2 起启用 Landlock 的 Linux 服务器选「完整 DSH」档被误拒的问题（启动前探针仍指向已撤掉的旧启动器包）；README 改正无沙箱时的实际行为；无 migration。 |
+| **2.9.3** | 2026-10-12 | 安全修复：AI 助理的沙箱放宽请求在任何审批档位都转人工确认，不再被 3 档免提示或“本类不再询问”自动放行；无 migration。 |
+| **2.9.2** | 2026-10-11 | AI 助理运行时升至 DSH `0.1.5-rc.3`，消除 GHSA-8m2g-8cgm-3vcp（原本不可达）；runtime `npm audit` 归零；功能与工具面不变；无 migration。 |
+| **2.9.1** | 2026-10-11 | 依赖安全补丁：proxy-addr、Electron 43.7.5、MCP SDK、sharp 等升到修复版；DSH 钉版不变；无 migration。 |
+| **2.9.0** | 2026-10-10 | 开庭时刻与地点、快录直接记开庭、传票文字层（`unpdf`）/OCR/视觉回退识别与附件事务、手机日历窄屏与日期快录预填、节前顺延提示；migration 029。 |
+| **2.8.0** | 2026-10-09 | 刑事案件字段与刑事期限规则；行政诉讼/行政复议期限规则（草稿）；2020–2026 法定节假日日历与工作日计算；按月/按年期间取到期月对应日；期限手动调参；案件类型与批量设类型；change_log 修改审计。migration 021–028。 |
+| **2.7.3** | 2026-10-05 | 修正纯应收分成款项的律师费基数进入我方收入、待收、逾期和统计的问题；页面明确标注“他方基数”，我方应收分成仍进入净额；同一款同时有应收与应付时保持双向结算口径。 |
+| **2.7.2** | 2026-10-05 | 新增跨案件合作对象通讯录与案件参与人；应收/应付分成可选择本案参与人，也可只记录实际分成结果；统计页增加合作排行；费用页进一步收敛为关键事实优先、低频内容默认收起。migration 020。 |
+| **2.7.1** | 2026-10-04 | 律师费结算支持同一笔同时形成应收与应付；收款入口统一为“记律师费 → 设置钱怎么走 → 收到钱了”；公开仓以 migration 019 兼容既有 017/018。 |
+| **2.7.0-beta.5** | 2026-08-26 | AI 助理可直接读写案件记录（联系人、待办、事件、事实、期限），全部带 AI 来源戳、人工可改可撤；agent 新增期限强制「待核」，确认前不进提醒。案件详情页重排为工作台：进页面一屏先见期限跑道 / 待办与案件进程 / 联系人，文件定高内滚，AI 加的内容有标记、AI 期限一键确认。migration 018。 |
+| **2.7.0-beta.4** | 2026-08-26 | AI 助理补齐逐命令审批，将 bash 与联网纳入三档策略；全局仍默认 1 档，2 档按动作最小外发做智能分类、异常一律回落人工确认。Linux full/bash 增加真实沙箱门禁；`folder_path` 失效时安全回落同名目录并在文件页提示，GET 遇文件挂载缺失返回 503 且不创建影子目录。 |
+| **2.7.0-beta.3** | 2026-08-24 | 案件文件夹正式成为 AI 项目：建案可选择/创建 workspace，打开案件助理自动绑定。安全 Markdown 渲染恢复；DSH 升至 `0.1.1-rc.2`，默认 project 档恢复受案件边界保护的文件工具，full 档恢复命令、jobs、goal、subagent、workflow、Ralph 与 web；支持受信任 Cordis patch 热更新，并加入上游版本统一升级与 parity/真实启动门禁。 |
+| **2.7.0-beta.2** | 2026-08-23 | AI 助理设置面支持界面加密保存 API key、供应商预设、拉取模型列表与 `apiKeyEnv` 高级选项；修复上游认证失败被误判为案齐登录过期。 |
+| **2.7.0-beta.1** | 2026-08-22 | AI 助理 sidecar 首个可分发 beta：Electron DMG 内置 runtime/assets，默认关闭，数据结构与 2.6.0 完全一致、可互换回退 |
+| **2.6.0** | 2026-08-17 | 开源转换与首次公开候选：AGPL-3.0-only、去混淆与归属/治理材料，两批安全加固，Electron 与公开发行 workflow 更新；Android 改为用户配置自托管服务器，补齐产品 README、当前 UI 截图、图标产线和公开边界中性化；期限规则表经作者核准（review=approved） |
+| **2.5.0** | 2026-08-14 | LegalRAG 收费候选持久去重闭环：strict typed key 三态匹配、人工 alias、跨来源继承、正式收费编辑/删除边界；无 migration |
+| **2.4.0** | 2026-08-11 | 费用页案卡堆、状态色带与粘性抬头收缩；自托管 Noto Sans/Serif SC 可变字体 |
+| **2.3.0** | 2026-08-06 | 折叠体系收敛为事实条、账本行、归档门；8 页响应式重构；无 migration |
+| **2.2.6** | 2026-08-05 | 案件详情面板栏头横边距修正；纯前端 |
+| **2.2.4** | 2026-08-05 | 阶段变化自动生成工作日志；案件款项独立折叠与费用页案件条加宽 |
+| **2.2.3** | 2026-08-05 | 全站原生折叠；连续月历、未排期托盘与图例布局对齐 |
+| **2.2.2** | 2026-08-05 | 日历拖拽改为单一 Pointer 管线；跨天长条车道化并支持整体平移 |
+| **2.2.1** | 2026-08-04 | Electron 应用显式 ad-hoc 深度重签，避开 Electron 出厂 linker 签名共享 CDHash |
+| **2.2.0** | 2026-08-04 | 日历待办调度台、未排期托盘、跨天任务和截止时刻；migration 015 |
+| **android-v1.1.0** | 2026-08-18 | 首个公开 Android 发行：壳不再内置服务器地址，首启填写并可随时切换自托管实例（公网强制 HTTPS，回环 / RFC1918 / `.local` 允许 HTTP 并明示），深链与导航严格同源比对，切换服务器清除会话；APK 与 `.sha256` 发布到 GitHub Release |
+| **android-v1.0.0** | 2026-08-04 | Android WebView 壳独立发行线：深链、上传、带会话下载和返回键行为 |
+| **2.1.4** | 2026-08-04 | maskable 图标安全区增大 |
+| **2.1.3** | 2026-08-04 | Web App Manifest 与 192/512/maskable 图标 |
+| **2.1.2** | 2026-07-31 | Electron 顶栏为 macOS 红绿灯让位；个人设置落库；migration 014 |
+| **2.1.1** | 2026-07-31 | 修复 Electron 首次引导；数据目录自动创建专用子目录；图标适配 macOS 网格 |
+| **2.1.0** | 2026-07-31 | 对外英文名改为 ANQI，中文名案齐不变；内部兼容标识继续保留 |
+| **2.0.3** | 2026-07-31 | 修复 migration 013 与不可变分成写守卫冲突，补带存量数据 fixture |
+| **2.0.2** | 2026-07-31 | Electron 后端只监听回环地址；未签名 DMG 更新改为浏览器下载 |
+| **2.0.1** | 2026-07-31 | 历史私有发行链修复，无应用行为变化；该发行方式由 2.6.0 公开发行转换取代 |
+| **2.0.0** | 2026-07-31 | 历史闭源产品化：中性 actor、DMG JavaScript 混淆与专有 EULA；许可证和混淆策略由 2.6.0 明确取代 |
+| **1.9.0** | 2026-07-31 | 今日页待办分为今日 / 本周 / 全部，无日期项进入“未排期” |
+| **1.8.1** | 2026-07-29 | 日历返回全状态待办；图例可筛选类型与已处理项 |
+| **1.8.0** | 2026-07-29 | 今日、案件、费用三页阅读层级升级；案件夹款项凭证；migration 012 |
+| **1.7.5** | 2026-07-21 | 今日跑道改期、案件搜索补全、设置假交互收口、分成月份与动作一致性 |
+| **1.7.4** | 2026-07-21 | 待办/日志就地录入、资金区分层、时间线按需渲染、文件常驻拖放区 |
+| **1.7.3** | 2026-07-20 | 文书候选按本案归属、原始材料与直接证据 fail-closed；来源精准定位 |
+| **1.7.2** | 2026-07-20 | 费用页就地记款、分成前置引导、可逆减免、结算轨迹直达与无障碍修正 |
+| **1.7.1** | 2026-07-20 | 案件页快录默认挂本案、跑道改期、状态确认、案件字段自救和人话文案 |
+| **1.7.0** | 2026-07-20 | LLM 推荐 intent + 状态指纹闭环；LegalRAG 逻辑事实与多来源证据分层；migration 011 |
+| **1.6.1** | 2026-07-20 | 费用总账突出 `已收 − 应付 + 应收` 的全期净额，并补每案净额 |
+| **1.6.0** | 2026-07-19 | 分成管理改为律师可读的资金卡与自然语言算式；migration 010 |
+| **1.5.1** | 2026-07-18 | 应收/应付分成直达入口；允许先记金额尚未确定的暂定公式 |
+| **1.5.0** | 2026-07-17 | 案件夹与 LegalRAG 共享原件桥、checksum/revision、收费/事件候选；migration 009 |
+| **1.4.2** | 2026-07-16 | 费用明细按款项事实、收款条件、分成与结算三层阅读 |
+| **1.4.1** | 2026-07-16 | 分成台账防重、active agreement 唯一性与事务嵌套保护；migration 008 |
+| **1.4.0** | 2026-07-16 | 不可变公式修订、分成计划、后端预览、确认快照、更正/撤销；migration 007 |
+| **1.3.1** | 2026-07-15 | 历史孤儿分成人工修复工作台；migration 006 |
+| **1.3.0** | 2026-07-15 | 分成挂款、总账净口径、应收不对称进入全局总账 |
+| **1.2.0** | 2026-07-15 | 分成约定与台账、收款联动、待分提醒和统计净口径；migration 005 |
+| **1.1.0** | 2026-07-13 | 快录 LLM 整理只回填 `task | log` 表单，不写库、不产期限 |
+| **1.0.2** | 2026-07-13 | 修复统计页在无到期期限时渲染字面量 `null` |
+| **1.0.1** | 2026-07-13 | `/api/stats` 接入真实数据；案件夹文件类型图标 |
+| **1.0.0** | 2026-07-13 | UI v5 三皮肤 + 案件夹 SSE 双向同步 + 版本号归一 |
+| **0.9.x** | 2026-07-13 | UI v4“翡翠·增强”原型，后由 v5 取代 |
+| **0.5.0** | 2026-07-11 | 案件文件桥：案件夹是唯一文件真相源 |
+| **0.3.0** | 2026-07-11 | 账号密码登录与 30 天会话；律师费台账 |
+| **0.2.0** | 2026-07-11 | 确定性期限引擎与 L0 digest |
+| **0.1.0** | 2026-07-11 | P0 电子台账：SQLite、REST、Web UI 与 CLI |
+
+---
+
+## 2.7.1 — 律师费双向分成结算
+
+- 同一笔律师费可以分别设置“我应收”和“我应付”的分成；确认收款时逐条选择本款形成应收、形成应付或不关联，再统一预览和记账。
+- 费用页与案件页的主入口直接进入“确认收到律师费”或更正流程，后台继续保存不可变结算快照和追加式历史。
+- 新增 migration 019，专门兼容公开仓已有的 017/018 案件 workspace 与 Agent 数据结构；不回填、不重算既有分成历史。
+
+## 2.7.2 — 合作对象通讯录与分成记录收敛
+
+- 新增跨案件 `people` 通讯录和案件 `case_participants` 关联；存量案件联系人中的合作律师、对方律师会回填为可选参与人，不改写既有分成事实。
+- 应收、应付分成约定和台账均可选关联本案参与人；不知道他方收款金额时，仍可只记录我实际收到或分出的结果，知道基数时再补填基数与比例。
+- `/api/stats` 新增合作对象聚合，统计合作案件数、分成笔数、应收和应付金额；旧记录按合作对象姓名回退聚合。
+- 新增通讯录页面；案件页与费用页的低频参与人、历史、基数和比例字段默认收起，费用页无数据的经营信号不再占位。
+- 新增 migration 020 及存量联系人回填、幂等、外键和原子回滚测试。
+
+## 2.7.3 — 他方收款基数不计入我方收入
+
+- 纯 `receivable` 分成挂在律师费款项上时，该款仅作为他方收款基数保留记录，不再进入我方已收、待收、逾期、统计和 digest。
+- 我方应收分成仍按原口径计入净额；同一款同时存在 `receivable` 与 `payable` 时，继续按双向结算计入我方律师费毛额。
+- 费用台账、案件资金区和统计页统一显示“他方基数”，避免把他方收款误读为我方收入。
+
+## 2.8.0 — 刑事与行政期限、工作日日历、案件类型与修改审计
+
+整合外部贡献者的本地增强版（#22，经 #23 合入），并补充行政期限规则与工作日日历。
+
+- **刑事案件**：案件新增作案类型、审理程序、案件性质、羁押状态四个维度及办案机关、羁押地点等业务字段；刑事期限规则按多维条件匹配，条件缺失时提示补填。刑事期限遇节假日默认不顺延，可逐条选择按刑诉法 §105 顺延。
+- **行政期限**：新增行政诉讼、行政复议期限规则，每条附法条原文与官方来源；新增复议前置标记与自动建议；标记为复议前置时不派生直接起诉期限。规则表状态为 `review: draft`，使用前须逐条核验。
+- **规则隔离**：民事、刑事、行政规则按案件程序严格隔离，同一触发事件不会在不同程序间重复派生期限。
+- **节假日与工作日**：内置 2020–2026 年国务院办公厅节假日安排（含调休），新增工作日计算单位；期限跨越未入库年份时明确提示，`tools/update-holidays.js` 用于导入新年度通知。
+- **期间计算**：按月/按年的期间取到期月的对应日，无对应日取月末（民法典 §202）。
+- **手动调参**：期限可调整天数、单位、起算方式和顺延规则并记录理由，届满日由引擎按新参数重算，改锚点事件日期时继续按参数级联。
+- **案件类型**：案件分为民事、刑事、行政、非诉、其他、未分类；新建与详情页可改，列表支持按类型分组和批量设类型。存量案件只按「刑事 / 行政」程序前缀自动归类，其余为「未分类」。
+- **修改审计**：新增 `change_log`，在数据库触发器层记录案件、事件、期限、待办、日志的字段级变更（带 actor、来源与派生规则 id）；联系人、通讯录、案件参与人及费用/分成结算表只记对象与动作，不复制姓名、电话、证件和金额；案件页新增「变更」视图与 `/api/changes` 读取接口。
+- **民事规则修正**：申请执行期限依据更新为民诉法（2023 修正）§250；保全续行提示改为须在保全期限届满 7 日前申请（法释〔2020〕21号 §18）。
+- 新增 migration 021–028；024、025、027 有独立 fixture 测试，其余由引擎与 HTTP 回归覆盖。全检由 68 步增至 80 步。仓库附带隐私 pre-commit / pre-push 钩子，默认不启用。
+
+**升级注意**：migration 021–028 只加列、加表、加触发器并按程序前缀回填案件类型，不改写既有期限日期；升级前备份，回退旧版本须同时恢复备份。
+
+## 2.9.1 — 依赖安全补丁
+
+- 根依赖：proxy-addr 2.0.7 → 2.0.8（IPv4-mapped IPv6 短前缀信任网段会匹配全部 IPv4；默认 `ANJIAN_TRUST_PROXY` 不受影响）；Electron 43.4.0 → 43.7.5（同一大版本，`allowScripts` 钉版键同步；Electron 43 已无安装脚本，二进制首次运行时下载）；仅构建期使用的 undici、brace-expansion 升到修复版。
+- AI 助理 runtime：`@modelcontextprotocol/sdk` 1.30.0 → 1.31.0、sharp 0.35.4 → 0.35.5（librsvg 修复，影响 glibc Linux 即 Docker 镜像）、proxy-addr、ip-address、fast-uri 升到修复版；DSH 钉版仍为 `0.1.1-rc.2`。
+- 暂留：DSH GHSA-8m2g-8cgm-3vcp 位于 HTTP 控制面 `dsh-api-gateway`，案齐 Cordis 配置不挂载该插件、与 DSH 只走 stdio JSON-RPC；修复版 DSH（≥ 0.1.2）缺少本仓依赖的 `dsh-sdk-jsonrpc-demo`、`dsh-tool-subagent-report` 等包，需单独适配。http-cache-semantics、sprintf-js 只在 electron-builder 下载 Electron 时使用，不进 DMG 与 Docker，上游暂无公认修复版。
+- 均为 semver 范围内升级，版本选取发布满两周者（sharp 与 MCP SDK 的修复版本身不足两周，取最早修复版）；`update-dsh-runtime` 兼容门禁与 `tools/check.sh` 全绿。
+
+**升级注意**：无 migration，数据库与 2.9.0 完全一致，可直接互换回退。
+
+## 2.9.2 — AI 助理运行时升级（DSH 0.1.5-rc.3）
+
+- AI 助理 runtime 由 `0.1.1-rc.2` 升至 `0.1.5-rc.3`（2026-09-22 发布）。旧闭包里的 `@deepseek-ai/dsh-client-connection` 带 GHSA-8m2g-8cgm-3vcp（本地 HTTP 控制面 Host 头鉴权绕过；案齐未挂 api-gateway、走 stdio，原本不可达），新闭包已不含该包；叠加 2.9.1 的非 DSH 补丁后，runtime `npm audit` 归零。
+- 上游撤包/改名的适配：`dsh-sdk-jsonrpc-demo` 只作版本号与打包核验标记，改读 `dsh-app-boot`；子 Agent `report` 工具并入 `send_message`，删除对应挂载行；`dsh-tool-str-replace-editor` 已不随 dsh-base 安装，改为直接依赖以保留 full 档能力；persona 配置键 `text` 改为 `prefix`。
+- 运行面适配：`dsh-session-projection` 两档常挂（多数核心插件已 inject 它）；`dsh-agent-presets` 不加载上游自带 preset；`dsh-agent-instructions` 项目根固定为案件夹；`dsh-anqi-jsonrpc` 改用 agent-scoped waterfall 应答 ask_user、按 seq 读审批事件，并把 `agent/assistant-stream` 分片按原 `assistant/chunk` 形状转发，抽屉流式渲染不变。
+- dsh-base 新增 8 个宿主 row 经审查列为有意排除：向 DeepSeek 附带会话日志/插件清单的请求扩展、写 `$DSH_HOME/storages` 的会话列表缓存、web_fetch provider。
+- `npm run agent:update-runtime` 增加目标版本发布预检、overrides 自动对齐实际闭包、schemastery 跟随 dsh-tools、只重解析 `@deepseek-ai/*` 作用域；parity 门新增 lockfile 层面的单一版本与全覆盖校验。release 的 DMG 核验加入新的硬依赖原生模块 `node-addon-system-darwin-<arch>`。
+- 会话文件格式升至 v3：旧版写下的 `session.jsonl` 原样保留；supervisor 每次启动新建会话、从不续开旧会话，回退旧版只会留下未被读取的 `session.v3.jsonl`。
+- 发版前除 `tools/check.sh` 与 release/docker 演练外，另跑真模型人工门禁 `test-agent-tier2-live`、`test-agent-live-web`、`test-agent-redline-model`，均通过。
+
+**升级注意**：无 migration，数据库与 2.9.1 完全一致，可直接互换回退。
+
+## 2.9.3 — 沙箱放宽请求一律人工确认
+
+- 修复自 2.7.0-beta.4 起存在的审批缺口：DSH 允许模型在 bash/文件操作被沙箱拒绝后申请放宽（`sandbox_permissions`，最宽到 `danger-full-access`，即不进沙箱），这类请求与普通命令同为 `toolName=bash`，此前会被 3 档免提示、“本类不再询问”白名单直接放行，2 档也会送分类器。放宽一经批准即越过 DB 与他案的物理隔离。
+- 现在宿主按 reason 前缀 `escalate sandbox to ` 识别放宽请求，任何档位都转人工卡片（标题标明“放宽沙箱”），不送分类器；卡片不提供“本类不再询问”，服务端也拒绝把放宽记成本类放行（`invalid_remember`，HTTP 400）。普通命令的三档行为不变。
+- `tools/test-agent-bash-approval.js` 增加 3 档 / 白名单 / 2 档三条放宽回归；用真实 supervisor + worker（本地假模型）复核过 1/2/3 档下放宽请求均转人工卡片、拒绝后不越界。
+
+**升级注意**：无 migration，数据库与 2.9.2 完全一致，可直接互换回退；回退到 2.9.2 及更早版本会重新带回该审批缺口。
+
+## 2.9.4 — Linux 服务器 Landlock 沙箱探测修复
+
+- 修复 2.9.2 引入的回归：DSH 0.1.5 起 Landlock 启动器随 `@deepseek-ai/node-addon-system-<platform>-<arch>` 分发，而 supervisor 的启动前探针仍指向已撤掉的 `node-addon-landlock-run-*`，导致宿主内核启用 Landlock、容器内 bwrap 不可用的 Linux 服务器（Docker 默认参数下常见）选择「完整 DSH」档时被误判为没有沙箱、整档拒绝启动。方向是 fail-closed，不会裸跑命令。
+- 探针改按上游 `launcherPath()` 同一规则从 runtime 根解析平台包；`tools/test-agent-sandbox-boundary.js` 新增结构门禁，对照上游包名规则、校验 runtime lockfile 含 Linux x64/arm64 平台包，Linux 宿主上再校验启动器真实存在。
+- 在启用 Landlock 的 Ubuntu 24.04 + Docker 28（AppArmor 限制无特权 userns，bwrap 不可用）上实测：已发布 2.9.3 镜像复现误拒；修复后镜像默认参数即选中 Landlock，完整档启动、bash 在本案读写正常，读写他案与正式库均被拒绝。
+- README 改正：服务器不具备沙箱条件时完整档会在启动前被拒绝，而不是“仅禁用命令、其余能力不受影响”。
+
+**升级注意**：无 migration，数据库与 2.9.3 完全一致，可直接互换回退。
+
+---
+
+## 2.10.0 — 提醒中枢与应用内通知
+
+- **自动提醒档位**（settings 可改、真保存）：开庭前一天 18:00 与当天 07:30；已确认期限前 3 天 07:30 与当天 07:30；带 `due_on + due_time` 的待办截止前 30 分钟。来源查询与 L0 digest 同口径：只提醒 active 案件、`status=pending` 且 `review_status=confirmed` 且非 advisory 的期限、open 待办；AI 填写的待核期限不提醒。
+- **派生而非录入**：自动提醒以 `(source_type, source_id, tier)` 为身份，worker 每个 tick（默认 30 秒）对全部来源完整对账——来源改日期/时刻/标题原地更新并 `version+1`，来源完成、案件关闭、档位关闭或来源消失则取消并记原因；用户取消过的自动提醒在来源指纹不变时保持取消。`GET /api/reminders` 读取前也会先对该案对账。
+- **人工单条提醒**：`POST /api/reminders` 创建即确认；改期与取消必须带 `expected_version`，不一致 409；发送中不可改；取消只改状态不删行；所有人工动作进 `audit_log`。
+- **到点执行**：短事务领取（`scheduled → sending`，一次最多 50 条）并以唯一 `delivery_key` 写投递意图，事务外调用渠道；超过追赶窗口（默认 60 分钟，`ANJIAN_REMIND_CATCHUP_MINUTES`）标 `missed(window_expired)`；服务启动把残留 `sending` 置 `unknown(crash_recovery)`，不自动重发；全程不调用任何模型。
+- **渠道插件口**：注册表 `id / label / configured(settings) / deliver()`；本版只实现 `inapp`——投递先落 `queued`，经 `GET /api/notifications/stream`（SSE）推到已打开的页面，页面弹浏览器通知并 `ack` 为 `shown`；无人在线时 24 小时内下次连上补发，超时 `expired`。企业微信、飞书、钉钉等外部渠道留待后续版本。
+- **界面**：顶栏 🔔 徽标与最近提醒列表（含「全部标为已看」与通知权限申请）；用户中心新增「提醒」分区（总开关、五个档位、浏览器通知权限、worker 心跳与待看 / 错过 / 失败计数）——`remind_enabled=false` 只停止自动档位，手动添加的提醒仍按时发；案件页「期限跑道」下新增「提醒」块（自动行可取消，人工行可改期 / 取消，可添加）。通知正文只含案件名、事项、时间与开庭地点，不含联系人或金额。
+- **桌面与移动端**：macOS App 关闭窗口改为隐藏（页面与 SSE 连接保持，通知照弹），Dock 图标或重新打开即恢复；Android WebView 不支持 Web Notification API，仅保证页内铃铛可用；未做 Service Worker / Web Push。
+- **部署**：新增 env `ANJIAN_REMIND_POLL_SECONDS`（默认 30，最小 1）、`ANJIAN_REMIND_CATCHUP_MINUTES`（默认 60）；反向代理须对 `/api/notifications/stream` 关闭缓冲并放长读超时（SELF-HOSTING.md 有 nginx 示例）。
+- **测试**：`tools/check.sh` 由 86 步增至 92 步——migration 030、规划器（含 `TZ=UTC` 与 `TZ=America/New_York` 子进程换算一致性）、worker 状态机（追赶窗口 / 唯一投递 / 崩溃恢复 / 渠道异常 / 50 条上限 / 24 小时过期）、HTTP 与 SSE 全流程（含「提醒子系统从不写 events/deadlines/tasks」断言）、前端静态契约、Electron 窗口策略。
+- **数据**：migration 030 新增 `reminders` 与 `reminder_deliveries`（派生表，不进 `change_log` 触发器），`settings` 新增 `remind_*` 六键。
+
+**升级注意**：migration 030 只建表加索引，不改既有表；回退到 2.9.x 需先恢复升级前备份（旧版不认识 `user_version=30`）。
+
+---
+
+## 2.11.0 — AI 总入口与全局案件 intake
+
+- **形态**：新增一个 scope=`global` 的 DSH worker，与案件助理共用 supervisor、JSON-RPC、SSE、审批和提问回路。全局 workspace 固定为 `DB_PATH` 同级的 `agent-global-workspace/`，权限 0700；无论设置选择什么能力档位，全局永远是 project/read-only，也不跑 bash 探针。
+- **信任模型**：全局会话先调用本地 `anqi_case_resolve`，唯一命中自动授予；多候选只能从服务端刚提供的候选中 `anqi_case_select`。`case_id` 不来自模型自由文本，未授予案件的读取和写入均拒绝；task/worklog 可选择成为不挂案件的所务记录。
+- **工具与记录**：全局工具覆盖认案、选择、白名单案件读取、工作日志、待办、开庭/程序事件、联系人、事实、待核期限和收件箱建议；不开放 digest、文件、shell、联网或 subagent。`anqi_worklog_add` 同时补到案件会话，所有 AI 工作日志写入 `created_by='ai'`。 认案结果与案件会话的 `case_folder_info` 都附带北京时间当天日期与星期，「下周三」之类相对日期直接换算，不再停下来问律师。 案件助理的系统人设与 `anqi-case-brief` 技能对齐直写工具：律师口述的已办、待办、开庭与联系方式直接记入本案（带 AI 标、可改可撤），口述期限只记为待核草稿、确认前不提醒，只有需要律师本人判断的事项才进收件箱。
+- **前端**：全站一个 AI 抽屉，标题栏有「项目」选择器——「总入口 · 不挂案件」（不绑案件，只有案齐领域工具与本地认案）或某个在办案件（案件夹即项目）；案件页默认本案，其它页默认总入口，切换项目不停止任何 worker。顶栏「AI」与案件页「AI 助理」开同一个抽屉；快录条增加「交给 AI」切换，发往当前选中项目并标明「→ 目标」。抽屉提供本轮记录、案件链接和撤销入口；刷新后不重建本轮记录，案件页时间线显示「AI 加的」。
+- **测试与数据**：新增本地匹配、全局内部 HTTP、全局 HTTP、真实 DSH global composition 和前端静态契约；migration 031 为 worklog 增加 `created_by`，存量行默认为 `manual`，不改 `change_log` 触发器。
+- **界面一致性收口**（main 上的 UI 提交 5a5a2a3，随本版发布）：
+  - 案件联系人事实条统一字段列和动作按钮的垂直居中；联系人摘要在窄屏保持 64px 字段列，操作控件满足 44px 触控高度。
+  - 费用与案件账本状态标签扩充状态列，款项名称与“他方基数”标签分开截断；平板账本在 1000px 以下切换两行布局，避免动作列被裁切。
+  - 资金 UI QA 同步当前账本、分成弹窗和案件资金区 DOM 契约，并增加联系人摘要的三皮肤/桌面与窄屏验收。
+
+**升级注意**：migration 031 会为现有 `worklog` 行填入 `manual`。全局 workspace 在首次启动时自动创建于数据库同级目录；v2.12 的 IM 入站可直接复用全局 HTTP prompt 面。回退前请保留数据库备份，旧版本不会识别全局 worker 相关界面和新增列。
+
+---
+
+## 2.12.0 — 企业微信智能机器人与提醒外发
+
+- 通过 `@wecom/aibot-node-sdk@1.0.7` 建立 API 模式 WebSocket 长连接；没有启用或没有成对凭据时零外连，提醒默认 `preview` 只记模拟投递。
+- 用一次性十分钟挑战码把一个企业微信 userid 绑定为本人；只处理当前 BotID 的本人单聊，群聊、非本人和图片/文件/视频不进入 AI。文字、语音和混排文字复用同一个 global supervisor，会话事件带 `origin=im:wecom`。
+- 企业微信里可作答 question、取消当前轮次；approval 回到网页处理。流式回复按平台时限与字节上限收口，提醒正文不带联系人或金额。
+- 用户中心新增企业微信面板、绑定/解绑/测试消息和连接状态；应用内通知只读取 `channel=inapp`。新增 migration 032（绑定与七日去重表）和 loopback mock 测试。
+- **费用页窄屏修复**（PR #39，随本版发布）：手机宽度下费用页「按案款项」组头的计数「N 案 · 展开 M」在 pro 皮肤（等宽数字字体）放不进标题预留的 92px，整块掉到第二行，组头比 paper/jade 高 16px，`npm run qa:finance` 三皮肤布局比对因此失败。改为标题吃剩余宽度、计数按自身字宽与标题同行并按基线对齐，三皮肤组头高度一致；两位数以上的案件数也不再挤到第二行。各皮肤的数字字体不变。
+- **用户中心企业微信面板（Mac 验收修正）**：挑战码不再被状态轮询覆盖、绑定后停止倒计时；刷新后回填已保存的 BotID（只改提醒档位也能保存）；连接中 / 重连中自动刷新状态；未连接时「开始绑定」置灰；绑定时间按北京时间显示；测试消息按发送结果提示。
+
+**升级注意**：默认不连接企业微信；提醒默认「模拟」。同一个机器人只能接一处。开启后，提醒内容和本人单聊中的 AI 对话会经企业微信服务器传输；备份时仍需保护 `secret.key`。
+
+---
+
+## 2.12.1 — AI 记程序事件时看得见合法事件类型
+
+- 问题（2.11 起）：`anqi_event_add` 的 `type` 只写了「见词表」，模型拿不到词表，只能猜事件 id；服务端按词表拒绝后模型改记待办，程序事件没记上，确定性引擎也就派生不出法定期限。总入口与案件助理共用这个工具，两边都有这个缺口。
+- 修复：supervisor 启动 worker 时把服务端同一份事件词表（民事及通用 / 刑事专用 / 行政专用）经 `DSH_ANQI_EVENT_TYPES` 注入，`dsh-anqi` 据此给 `type` 生成枚举与逐项中文对照。词表外的值在发请求前就被 DSH 参数校验拦下，报错列出全部合法值；服务端 `isEventType` 校验不变。打包后插件与 `rules/` 不在同一目录树，所以由服务端注入，不由插件自己读文件。
+- 词表缺失或格式不对时 `dsh-anqi` 拒绝加载、preset 挂载失败，不静默退回无枚举的自由字符串。工具集合、技能与 preflight 契约不变；每次模型请求的工具定义约增加 5KB。
+- 测试：`test-agent-direct-tools.js`（两个 scope 的枚举 = 词表、说明含每个 `id=中文`、非法值不发请求、注入缺失/损坏拒绝加载）、`test-agent-supervisor.js`（两种 worker 注入同一份词表）、`test-agent-runtime-composition.js`（真实 DSH 缺词表即挂载失败）、`test-agent-global-internal-http.js`（服务端仍拒绝词表外 type 且不落库）。
+- 真模型复测（DeepSeek，隔离临时库、虚构案件）：总入口一句「今天在测试人民法院领了张三诉李四案的一审判决书」首次调用即选 `judgment_served`，引擎派生上诉期；「下周三去测试人民法院领判决」按将来的事记成待办，没有试错事件类型。
+
+## 2.12.9 — AI 助理运行时升级（DSH 0.2.2-rc.2）
+
+- 运行时闭包整体从 `0.1.5-rc.3` 升到 `0.2.2-rc.2`（170 个 DSH 包同版钉死），schemastery 对齐 `3.19.0`；Node 底线随上游升到 24.9（Electron 内嵌 Node 24.21 满足，服务器直跑自建部署需检查 node 版本）。
+- preset 体系随上游重构：目录扫描式的 `dsh-agent-presets`（已停发）换为 `dsh-agent-preset-registry` + 组合内 `dsh-agent-preset` 声明行，anqi / anqi-global 两个 preset 的插件清单内联进 `anqi.cordis.yml`（原 `assets/preset/` 目录删除）；默认 preset 仍由 `DSH_ANQI_SCOPE` 钉死，第三方 preset 依旧进不来。
+- `{{cwd}}` 提示词变量被上游移除：persona 文案改为不依赖变量，目录上下文由新挂载的 working-directory 服务提供；刻意不挂 tool-working-directory，模型仍然不能自由 cd，沙箱根钉死案件夹。
+- 工具执行按新架构挂显式 `tool-executor-native`（启动必需），PTC 执行器显式关闭；workflow 从已停发的 worker-thread 换 `ptc-runtime` + `workflow-ptc`（full 档能力不变）；子代理 control 行自带 list_agents，独立 /list-agents 行删除；`cordis-plugin-hmr` 更名 `dsh-hmr`；补挂 mcp-resources（dsh-mcp-client 的硬 peer）；web search 显式保持 `deepseek-official` 旧版计费路径，不引入 Search API 计费面；先读后写策略（fs-observation-policy）在上游改默认关闭后显式保持开启。
+- 第三方插件补丁（设置页 `agent_plugin_patch`）从「原地热重载」降级为「重启 worker 生效」：上游移除了非 profile 补丁的 watch 通道，设置修改时的既有 `stopAll()` 联动正好承接——下次打开抽屉按新补丁重建。
+- `tools/update-dsh-runtime.mjs` 兼容 dsh-tools 从精确 pin 改范围声明 schemastery（`~3.19.0`）：范围解析为该范围内最新精确版再钉。parity 排除清单收录 0.2.x 新 row 的归类（插件管理/远程访问/配置编辑/DeepSeek 账号/OTel/cd 工具/agent-team 暂不引入）。
+- 门禁与回归：base parity（99 row 全审）、workspace containment、project/full/global 真实 JSON-RPC boot、EVENT_TYPES fail-closed、插件补丁重启生效断言全部通过；`tools/check.sh` 108 步全量通过。无 migration、无新环境变量、无前端逻辑改动。
+
+## 2.12.8 — 律师费作废
+
+- 一笔律师费收过款、又撤销了收款之后，此前只能一直挂在「待收」里：有结算记录的款项既不能删、也不能减免。现在可以「作废这笔律师费」，类比发票开出后冲红作废——撤销收款就是冲红，作废让这笔钱退出待收与逾期统计。
+- 两个入口：收款已撤销的款项，操作区多一个「作废这笔律师费」（要填原因）；撤销收款时也可以直接勾「撤销后作废这笔律师费」，一步做完。
+- 作废后款项和历次结算记录全部保留，状态显示「已作废」并带原因，金额归入「放弃 / 减免」一栏；随时可以「撤回作废」恢复为待收。作废状态下不能重新确认收款，要先撤回。
+- 没有收款记录的款项不走作废：不再收取用「减免」，记错了直接「删」，行为不变。
+- 不新增数据库字段：作废由「收款已撤销 + 款项不再收取」这两个既有事实推出，原因记在审计里。无 migration；新增接口 `POST /fees/:id/void`、`POST /fees/:id/void/undo`。
+- 回归：`tools/test-settlement-http.js` 覆盖前置条件、原因与版本校验、作废后统计口径、结算记录不增不减、撤回，以及普通减免不被当成作废；全量 check 108/108。
+
+## 2.12.7 — 分成台账更正出口、桌面版案件文件夹位置与跨页点击口径
+
+### 分成台账的更正出口
+
+- 手动记的分成不论待处理、已结清还是已减免，都能「更正」（金额、月份、状态、结清日期、备注）和「删」。此前已结清 / 已减免的手动记录在界面上没有任何按钮，记错了改不了也删不掉。更正在审计里留改前改后；从已结清退回待收 / 待分时自动清掉旧的结清日期。
+- 费用页的分成行（含本年已结明细）同样可以「更正」；「删」仍只放在案件页，不挂任何案件的外部分成例外（它们没有案件页，此前无处可删）。
+- 系统按结算算出的分成仍然不能直接改删，但案件页每一行新增「修改结算」，直达那笔律师费的更正弹层；后端拒绝直接改删时的提示也写明去「修改这笔结算」或「撤销这次收款」。
+- 手动记录与系统结算在同一笔律师费上重叠时，结算弹层不再只回一句「须先完成人工修复」：列出是哪几条手动记录（谁给谁、多少钱、什么状态），并给出两条都能走通的办法——把这项分成改为不关联这笔律师费（以手动记录为准），或就地删除手动记录后重新算（以系统计算为准）；待修复的历史分成改为引导去修复工作台。
+- 新增回归：`tools/test-settlement-http.js` 覆盖「冲突 → 更正 / 改不关联 / 删除手动记录 → 确认结算 → 修改结算」全程；`tools/test-share-correct.js` 覆盖更正弹层的纯逻辑。
+- 「已确认的结算只追加、不覆盖」的规则不变；无 migration，接口只增不改（冲突响应里的每条记录多带 `amount`、`due_month`）。
+
+### 桌面版可更改案件文件夹位置
+
+- macOS 桌面版菜单栏「案齐」下新增「案件文件夹位置…」：用系统文件夹选择器把「案件夹」整体指到电脑或同步盘上已有的案卷总文件夹，之后建案、案件换绑时下拉里列出的就是那里的文件夹；也可以一键恢复默认位置。此前位置固定在数据目录里，已有案卷只能搬进来。
+- 只换位置、不搬文件：案齐不移动、复制或删除任何文件；数据库和 AI 助理会话记录仍在数据目录。已有案件按文件夹名到新位置找同名文件夹，找不到的在案件文件页提示重新选择。更改后后台重启一次；新位置起不来会自动退回原位置。
+- 位置把关：整块磁盘、个人文件夹本身及其上级、包含数据目录的位置、数据目录里的其他文件夹、程序自身所在位置不能选，并说明原因；比较前先解析符号链接。
+- 模型不变：一个案件仍对应该位置下面的**一个单层文件夹**，AI 助理「只看得到本案文件夹」的沙箱边界原样成立；逐案任意路径、多层嵌套目录不在本次范围。
+- 案件工作区下拉在桌面版里提示位置可在菜单更改；位置失效（移动硬盘没插、文件夹改名）时的报错同样带上指引。服务器 / Docker 版不受影响，文件根仍由 `ANJIAN_FILES_ROOT` 与挂载决定。
+- 不新增页面可调用的本机接口（主窗口仍无 preload，无新 IPC）；无 migration。`tools/test-electron-backend-env.js` 覆盖位置解析与把关矩阵。
+
+### 跨页点击规则统一
+
+- 统一口径：待办点了原地开弹层；期限、开庭点了直达案件页时间线上**那一条**（`#tl-<kind>-<id>`），到达后自动解除筛选、展开被「只看最近几条」藏住的条目、滚到视口中央并高亮约 2.4 秒；目标已删除时提示「已不在本案时间线」。同一案件页内换锚点（粘贴链接、前进后退）也会重新定位。
+- 今日页：跑道行、头条卡整行 / 整卡可点（此前悬停整块变色却只有按钮或事项名能点），「打开案件处理」与键盘 `1`–`9` 也直达该期限；底部提示改为「1 头条 · 2–9 表内各行」（此前写「按行序」，但 1 其实是表格上方的头条）；「七日内开庭」案名直达那场开庭；右栏概览「临期/逾期死线」「今日开庭」「未结待办」也可点（跳到本页对应分区），五行外观一样、行为一致。
+- 日历：期限 / 开庭 chip 直达案件页那一条（此前只到案件页顶部），悬停提示写明点击去向；待办 chip 照旧原地开弹层。
+- 案件页：期限跑道的头条卡与行本身不可点，去掉悬停变色，不再假装能点。
+- 纯前端，无 migration、无接口变化。
+
+### 其他
+
+- 依赖补丁升级：express、qs、follow-redirects，以及开发依赖 minimatch、undici。
+- 本版无 migration、无新环境变量；全量 check 108/108。
+
+## 2.12.6 — 时间线条目可改内容
+
+- 案件时间线：事件、工作日志的「改日期 / 改期」换成「编辑」，期限在「改期」旁新增「编辑」。此前三者都只能改日期，开庭时刻 / 地点打错只能删了重录，而挂着派生期限的事件又删不掉。
+- 事件「编辑」：日期、送达方式、文书依据、备注可改，开庭另有时刻与地点；事件类型只读（类型决定派生哪些期限）。AI 提取的送达方式不在下拉表里时保留原值，不会一打开就被改空。
+- **改送达方式与改日期同口径走级联重算**：公告送达等会推移起算基准（规则 `service_modifiers`），此前 `PATCH /api/events/:id` 只在日期变化时重算，只改送达方式会留下算错的期限。现在两者任一变化都先回预览（`needs_confirm`，`event` 增加 `old_service_method` / `new_service_method`），确认后才落库；人工设定的期限照旧不动。确认框改用共享 `confirmModal`，不再用浏览器原生 `confirm()`。
+- 日志「编辑」：内容（多行）、日期、耗时、产物；期限「编辑」：名称、级别、法律依据，手录期限另可改计算说明（规则派生的会被引擎重算覆盖，不开放）。截止日仍走「改期」。
+- 后端校验：期限名称、日志内容不许改成空；日志耗时清空存 NULL（此前存空串），非整数拒绝。`datePrompt` 支持 `type:'textarea'`，必填项按去空白后判断；共享弹层 `.dmodal` 统一限高 88vh、超出在弹层内滚动（编辑开庭的弹层在 667px 高的手机上不再被裁切）。
+- 测试：API 冒烟（第 32 步）新增独立案件覆盖「改送达方式 → 预览不落库 → 确认后期限后移」「只改备注不触发重算」、日志与期限的校验与修改；全量 check 108/108。
+
+## 2.12.5 — 待办可点开编辑、完成可撤销
+
+- 今日页、案件页的待办行：点标题或行空白处打开待办弹层（与日历共用 `calendar-task-modal.js`）。此前今日页待办只能勾完成，行 hover 高亮却点不动。
+- 待办弹层：标题、优先级、备注可改（此前只能改日期）；只提交改过的字段；「完成 / 放弃」连同未保存的修改一起提交；已完成 / 已放弃的待办显示「重新打开」。案件页内打开不再给「打开案件」。弹层加宽到 440px，限高 88vh 可滚动（矮屏手机不裁切）。
+- 撤销：待办勾完成、弹层完成 / 放弃、期限「完成 / 放弃」（今日跑道、案件跑道、案件时间线）落库后提示条带 5 秒「撤销」（`api.js` `toastUndo()`，动作统一走 `public/js/record-actions.js`）。撤销待办完成会同时删掉那次完成自动写的「完成待办：…」日志。
+- 案件时间线上已完成 / 已放弃 / 已错过的期限新增「恢复」，改回在追。
+- 后端：`PATCH /api/tasks/:id` 离开 done 态时清空 `done_at`；无 migration。冒烟（第 32 步）补重新打开与改标题 / 备注 / 优先级断言；全量 check 108/108。
+
+## 2.12.4 — 文件桥不排队 json 工作流元数据
+
+- 问题：案齐文件桥 `SUPPORTED` 白名单收 `.json`，而 LegalRAG integrations 的类型白名单（pdf/docx/image/spreadsheet/text/md）从来不收；json 文件注册一律 `unsupported file type`，重试三次后停「处理失败」。v2.12.3 修复注册 404 后存量补跑时暴露（一批 task.json、checklist.json 等文书任务元数据落失败）。案件夹里的 json 是工作流元数据，不是案件材料。
+- 修复：`SUPPORTED` 移除 `.json`，reconcile 不再为 json 建行；用户手动对 json 点「立即处理」会得到「该文件类型暂不支持 LegalRAG 解析」提示。既有部署的存量 json 行可随部署一次性置 `ignored`（运维 SQL），不需要 migration。
+- 测试：`tools/test-legalrag-bridge.js` 案件夹放入 `任务元数据.json`，断言不进入 LegalRAG 队列；全量 check 108/108。
+
+## 2.12.3 — LegalRAG 文件桥注册案件名回落合法目录名
+
+- 问题（2.7.0-beta.3 起）：文件桥向 LegalRAG 注册新文件时，把 `cases.folder_path` 原样当作案件名发送；`folder_path` 为空或非法（例如早期从外部 registry 导入的多层路径）的部署里，LegalRAG 按案件名精确匹配不到案件，注册一律 404，新文件重试三次后停在「处理失败」。本地文件浏览与上传不受影响——案件夹解析对非法 `folder_path` 本就回落 `cases.name`，唯独注册 SQL 没走同一口径。
+- 修复：注册名改用与本地案件夹解析同一口径的 `caseDirectoryName()`：`folder_path` 为空或非法（含路径分隔符、隐藏目录等）时回落 `cases.name`，与 LegalRAG 既有案件名一致；合法单层 `folder_path` 仍按原值发送。
+- 适配提示：LegalRAG 侧按案件名精确匹配，新案件仍需先在 LegalRAG 建立同名案件，文件桥不会代建。
+- 测试：`tools/test-legalrag-bridge.js` 案件携带多层遗留 `folder_path`，断言注册 payload 的 `case_name` 必须是短名；全量 check 108/108。
+
+## 2.12.2 — 日历鼠标单击、快录条触控高度与共享弹层
+
+- 日历（2.2.2 起）：桌面端用鼠标单击单日待办、跨天长条或左侧「未排期」托盘条目，弹层打不开；键盘 Enter、触屏与窄屏正常。原因是按下鼠标时就把指针捕获到日历网格，随后的 click 被派给网格，条目自己的点击处理收不到。现在按下时只记录拖拽状态，移动越过 6px 阈值、确认是拖拽时才捕获；拖拽改期、把手改端点、拖到下月格自动翻月、Esc 取消行为不变。
+- 快录条：390px 下「记」等按钮只有 34px，低于 44px 触控线。快录条的按钮、输入框、下拉与「交给 AI」切换钮改用尺寸令牌：桌面 32px（原 34px），窄屏 44px；窄屏快录条折行后整条变高约 18px，页面底部留白自动跟随。
+- 共享弹层：今日、案件、日历三页的日期、待办与期限依据弹层统一由 `public/js/modal.js` 管理——打开时背景不可操作、焦点进入弹层，Tab 在弹层内循环，Esc、点遮罩或关闭按钮都会还原背景并把焦点还给打开前的位置；叠开多层时只有最上层响应 Esc。原有表单与保存逻辑不变。
+- 控件尺寸令牌：`--control-h`（桌面 32px）与 `--control-touch-h`（窄屏 44px），`.btn`、`.btn.small` 与事实条编辑按钮只在层 A 使用，三皮肤几何不变。
+- 测试：新增 `tools/test-modal-contract.js`（第 108 步，含日历「按下不捕获、越过阈值才捕获」断言与最小假 DOM 行为回归），`tools/smoke-quickbar-frontend.js` 增加快录条不写死像素高度的断言。浏览器验收用真实鼠标与触屏事件覆盖四种皮肤、1280/1024/768/390 宽度；未在 Safari、Firefox 与真机上测试。
+
+## 未发布 — 服务器开启完整档的部署说明
+
+**状态：仅文档，无代码改动。**
+
+- SELF-HOSTING.md 新增「在服务器上开启「完整 DSH」档」：部署前自检命令（用临时空库，不碰真实数据）、推荐的 Landlock 路线、两种放宽容器权限的 bubblewrap 配方及各自风险，以及开启后的隔离验证步骤。
+- 明确 Landlock 路线的内核门槛：案齐只接受完全强制执行，需 Landlock ABI 5，即 Linux 6.10 及以上；更老的内核只能部分生效，仍会被拒绝。README 同步。
+- 文档中的自检命令、seccomp 生成步骤与两种配方，均在已发布的 2.9.4 镜像上按原样执行验证：默认参数被拒；两种配方均选中 bubblewrap，本案读写正常，读写他案与写正式库均被拦；只加 `SYS_ADMIN` 而沿用默认 seccomp 仍被拒。
+
+## 未发布 — AI 助理图片输入
+
+**状态：开发分支 `feat/agent-image`，尚未合并 `main`。**
+
+- 当前模型 id 含 `vision` 时，Cordis 模型声明同时开放 text/image，案件助理状态下发布尔图片能力，输入区才显示贴图按钮并接受剪贴板图片；其余模型保持纯文本声明，前端不显示入口，服务端也会用中文 400 二次拒绝图片 prompt。
+- 图片以上游风格的 JSON base64 准入，每条消息最多 2 张、单张解码后最多 8MiB，仅允许 PNG/JPEG/WebP/GIF；宿主调用 DSH `admitEncodedImages`，发模型的 content blocks 与 prompt HTTP 只携带内容寻址 attachment ref/id，不把 base64 放进 SSE。
+- 图片字节只存 DSH `<DSH_HOME>/attachments/v1` 内容寻址库，不写案件夹、`anjian.db` 或审计日志。案件夹继续只保存律师自己的材料；supervisor 的刷新历史也只保存经投影的 attachment 引用。
+- 登录态回读路由只允许读取当前案件 live session 已实际引用过的 attachment；未引用 id、跨案 id 与未知 id 一律 404。用户气泡发送后立即显示缩略图，刷新后再从该回读路由显示历史缩略图。
+- 新增图片能力、HTTP/wire/回读及前端专项门禁（`tools/test-agent-image-capabilities.js`、`tools/test-agent-image-http.js`、`tools/test-agent-image-frontend.js`），全检尾部由 63 步增至 66 步。
+
+## 未发布 — 完整 DSH 档斜杠命令
+
+**状态：开发分支 `feat/agent-slash`，尚未合并 `main`。**
+
+- 案件 AI 助理的完整 DSH 档现在把 worker 已注册的斜杠命令接到现有对话面：输入框键入 `/` 后按服务端实时清单显示菜单，支持上下键、Tab 与点选补全；默认 `project` 档没有命令服务，继续不显示任何命令入口。前端不保存命令名白名单。
+- 命令仍从既有 prompt 端点进入。宿主只按 URL 中已核验的案件 id，从 supervisor 自己持有的 live worker 取 session；已知命令直达 worker 命令服务，未知 `/...` 或缺少命令服务时把同一文本当普通 prompt 交给模型，不吞输入、不另报“未知命令”。
+- worker 桥只扩展案齐自有 `dsh-anqi-jsonrpc`，没有挂载上游 Web/API gateway、host proxy/server 或 client connection。命令服务通过 Cordis 可选读取，因此默认档缺服务会返回结构化 `commands_unavailable`，不会令 worker 启动失败。
+- `command/run` 与 `command/done` 继续走既有 session.event → SSE 通路，在对话流中显示开始与完成/失败系统行。命令不伪造 `turn/*`；可能唤醒 agent 的命令只依据真实 `session.status running→idle` 更新宿主状态与串行边界。
+- 新增 worker 契约与宿主/HTTP 信任边界门禁（`tools/test-agent-commands.js`、`tools/test-agent-commands-http.js`），全检尾部由 61 步增至 63 步；前端既有冒烟扩充为清单驱动、零硬编码、负路径和命令事件静态审查。
+
+## 2.7.0-beta.5 — AI 助理直写案件记录 + 案件页工作台
+
+**状态：预发布版；分支 `feat/agent-sidecar`，尚未合并 `main`。**
+
+- 主动退掉三条旧限制：绑定案件的 AI 助理现在可以读取联系人，并可直接写联系人、待办、程序事件、案件事实和期限；`anqi_inbox_propose` 仍保留为只落收件箱的软建议入口。五个直写工具均由 supervisor 固定注入 session，服务端从 `session-registry` 反查案件，忽略请求体自报的 `case_id`。
+- migration 018 为联系人、期限增加持久来源戳，为期限增加 `confirmed | pending_review` 待核状态，并新增可人工/agent 直接增改删的正式 `facts` 表。事件沿用 `created_by='llm'`，待办沿用 `origin='llm'` 并在 API 投影为 `created_by`；agent 联系人、事实、期限使用 `created_by='ai'`。
+- agent 新增的期限一律强制 `pending_review`，不能通过 payload 改成 confirmed；待核行不进入 digest 的 red/week/watch（今日期限跑道）或期限推荐状态源。人工调用确认路由后只改变 review 状态，AI 来源戳保留，期限才恢复正常提醒。
+- 联系人、期限、事件、待办读响应暴露来源字段，期限额外暴露 review 状态；`anqi_case_get` 白名单同步加入 contacts 与正式 facts。人工事实 API 提供读取、新增、修改和删除，确保 AI 写入可见、可改、可撤。
+- 案件详情页改为工作台版式（方向 A 双栏重排）：进页面一屏先见左「期限跑道 → 未结待办」、右「案件进程 → 联系人」，案件文件挪入主列做成定高内滚模块（框内滚文件、框外滚整页），律师费下沉垫底；纯 `data-case-order` 调整，复用既有两栏排布引擎。
+- 案件页显露 AI 归属：AI 加的联系人 / 事件挂「AI 加的」标记，AI 填的期限挂「AI 填·待核」并在期限跑道与时间线提供「确认」按钮（`POST /api/deadlines/:id/confirm-review`），确认前不进首页提醒；编辑 / 删除按钮沿用既有，AI 写错可随手人工改。
+- 后端改 agent 插件、路由、migration、测试与数据契约，前端改案件页（`public/case.html` / `case.js` / `css/style.css`）；期限引擎计算本体未动。
+
+## 2.7.0-beta.4 — AI 助理审批、安全沙箱与文件回落
+
+**状态：预发布版；分支 `feat/agent-sidecar`，尚未合并 `main`。**
+
+### 逐命令审批与 bash / 联网三档策略
+
+- DSH 的 powerful tool 调用统一先过 supervisor 闸门；`bash` 显示完整命令，`web_search` 显示完整查询词，审批卡提供“允许一次 / 本类不再询问 / 拒绝”。“本类不再询问”只在当前案件的当前 live session 内有效，worker 停止、崩溃、重启或换案即清空。
+- 全局默认仍为 `1 · 谨慎`，不会默认开启 2 档分类。显式选择 `2 · 智能` 时，只有待裁决动作的最小文本会送往固定 DeepSeek 分类器；案件文件正文、数据库内容、凭据和夹外写入正文不外发。分类结果严格为 `allow / ask / block`，超时、网络错误、畸形输出全部回落 `ask`；数据库读写、夹外递归删除和非 DeepSeek HTTP POST 另有不可降级的本地阻断下限。
+- `3 · 放开` 只自动放行已专项验收的动作，沙箱、案件边界和正式表只读/人工确认红线继续生效；未知或未来工具仍需询问。每条 2 档裁决记录脱敏后的动作、结论与理由，便于追溯。
+
+### Linux/Docker 的 full/bash 真沙箱门禁
+
+- Docker 镜像安装 `bubblewrap`，但“二进制存在”不再视为可用。Linux supervisor 会在读取 API key、案件记录/案件夹和启动 worker 之前，分别做一次真实 bubblewrap 功能探测与完整 Landlock 探测；只有确认全量强制执行的后端才允许启动 `full`。两者都不可用时服务端以固定中文原因拒绝，绝不会退化成裸跑 bash；`project` 档仍可使用。
+- bubblewrap profile 先遮蔽数据库、全局文件根和 session 等宿主敏感路径，再只把当前案件 workspace 按原绝对路径绑定回来。默认无特权 Docker 容器若不允许创建所需 namespace，会安全拒绝；部署方必须通过自身容器安全策略提供可工作的 user namespace/bubblewrap 或完整 Landlock，不能靠关闭 supervisor 门禁换取 full 档。
+- 回归同时覆盖两条真实容器路径：默认 Docker 安全策略下必须在凭据/案件读取/worker spawn 前拒绝；具备可工作 bubblewrap 的隔离容器内必须允许当前案件读写，并真实拒绝其他案件读写。macOS 继续使用 Seatbelt 执行同一组边界对抗。
+
+### 外部 DSH/MCP 插件安全接入
+
+- 案齐运行时已经内置 `@deepseek-ai/dsh-mcp-client`；`src/agent/assets/anqi.cordis.yml` 里的 `mcp-anqi-local` 是同一机制的本地、受控实例。经审查的第三方 MCP server 可以通过一个 Cordis patch row 接入，不需要改案齐主线或另开一条绕过 supervisor 的进程链。
+- 接入前必须审查 patch、server 包/脚本、实际 `command`、`args`、`env` 与工作目录。第三方 DSH/Cordis 插件和其启动的 MCP server 都等同在本机执行代码；设置页只接受绝对路径、可读取、非符号链接的普通 `.yml/.yaml` 文件，这只是最低文件门槛，不替代代码审查。
+- MCP 工具在模型侧统一命名为 `mcp__<server>__<tool>`。新增 server 后应在隔离案件夹验证预期工具名与权限面；如果插件依赖 DSH Web Client 专用 UI 插槽，还需要单独做案齐抽屉适配，不能假定上游前端会自动出现。
+- 外部 patch 仅在 `full` 完整档加载，并随该档的其它完整能力进入真实沙箱与审批边界；默认 `project` 案件项目档不启用 `bash` 或 `web_search`，也不加载第三方 patch。切换到 `full` 是一次明确的权限扩大，不能把“只增加一个 MCP 工具”理解成仍处于默认权限面。
+- 新增或升级 server 后必须运行 `npm run check`：`dsh-base` parity、project/full 真实启动、workspace containment 与插件热更新门禁必须全部通过，不能用 skip/todo、放宽断言或删除既有门禁换绿。未经这套检查的 patch 不应填入律师日常使用的实例。
+
+一个最小的 stdio patch 形状如下；`command`、参数和环境变量必须替换为已经逐项审查的真实值：
+
+```yaml
+- insert:
+    - id: mcp-reviewed-example
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: reviewed-example
+        transport: stdio
+        command: /absolute/path/to/reviewed-server
+        args: []
+        env: {}
+```
+
+### 案件夹回落提示可见化
+
+- `cases.folder_path` 失效而同名目录仍在时（beta3 兼容回落），`GET /api/cases/:id/files` 的响应新增只读 `workspace_notice` 字段，逐字带出 secure-files 判定的回落原因；`folder_path` 有效或目录彻底不存在的案件整个省略该字段，不留空占位。既有响应字段与鉴权不变。
+- 案件页文件列表上方据此显示一行琥珀色提示（「⚠ 原案件夹「X」不存在，已临时回落到同名目录「Y」」）：文本只经 `textContent` 写入，样式复用三皮肤既有 amber 提示类，不新增 CSS；提示为空时移除节点、不占位。回落案仍照常读同名目录文件。
+- 文件根挂载不存在时，纯读 GET 路径返回 `503 文件根不存在`，不再调用建目录逻辑、也不在错误位置创建影子文件根；正常写路径的显式建目录语义不变。
+
+## 2.7.0-beta.3 — 案件工作区与完整 DSH
+
+**状态：已于 2026-08-24 以 `v2.7.0-beta.3` 预发布；尚未合并 `main`。**
+
+### 功能
+
+- **案件助理回复恢复 Markdown 阅读层级**：此前 `agent-drawer.js` 对流式 chunk 和最终 `assistant/message` 都直接写 `textContent`，导致 `#`、`**`、列表、引用、代码围栏和表格原样印在对话里。现新增零依赖、DOM-only 的安全 Markdown 渲染器，覆盖标题、段落、强调/删除线、代码、引用、列表/任务列表、表格与安全链接；原始 HTML 永不执行，`javascript:` 等危险协议不生成链接，图片语法只显示来源链接而不自动请求远端资源。流式与最终消息走同一渲染路径，并新增纯解析回归测试。
+- **案件夹正式成为 Agent 项目**：`cases.folder_path` 从“有字段但读路径不用”改为文件桥、款项凭证、LegalRAG 与 DSH supervisor 共用的稳定 workspace 指针；migration 017 把历史空值按案件名物化。新建案件可自动创建同名案件夹或选择同步盘已有目录，案件详情可换绑未占用目录；换绑只改指针，不移动、不复制、不删除原文件，并先停止该案 worker。
+- **恢复 DSH 文件与完整能力**：运行时从 `0.1.0-rc.7` 升至 `0.1.1-rc.2`。默认 `project` 档恢复 `read/read_image/write/edit/glob/grep`，但标准文件工具全部被 canonical containment 钉在当前案件夹；`glob/grep` 因绕过 `ctx.fs` 另有执行守卫。显式 `full` 档恢复上游 bash/jobs/goal/subagent/workflow/Ralph/web 等能力，继续保留案齐正式表只读/提案写入边界，并明示 shell 与联网的扩大权限。
+- **上游插件兼容与热更新**：完整档高级设置可指定一个已审查的绝对路径 `cordis.patch.yml`；案齐 launcher 用上游 Cordis patch + HMR 在现有 worker 上挂载、卸载或更新第三方插件。插件等同本机 Node 代码，拒绝相对路径、缺失文件、非普通文件和符号链接；依赖 DSH Web Client UI 插槽的插件仍需另做抽屉前端适配。
+- **上游更新门禁**：新增 `npm run agent:update-runtime -- <exact-version>`，统一更新 140 个 direct/override pin 和 lockfile；真实运行 project/full JSON-RPC boot、workspace containment、插件热卸载和 `dsh-base` parity，失败自动恢复旧 manifest/lock/依赖。上游新增 base row 未挂载或未明确归类会直接令门禁失败，不再静默漏能力。
+
+### 升级与兼容
+
+- migration 017 只为历史案件补齐缺失的 `folder_path`；不会移动、复制或删除同步盘里的既有案件材料。
+- AI 助理仍默认关闭；只有显式选择 `full` 档才会开放 shell、联网与上游完整工具面，第三方 Cordis patch 仅应指向已审查的本机配置。
+- 本版为预发布版；可直接从 `v2.7.0-beta.2` 升级，回退前应按发行手册备份数据库与案件文件夹。
+
+## 2.7.0-beta.2 — AI 助理设置面易用性改造（分支 `feat/agent-sidecar`，尚未合并 `main`）
+
+**状态：已于 2026-08-23 以 `v2.7.0-beta.2` 预发布；尚未合并 `main`。**
+
+**背景**：beta.1 的设置面要求用户先在系统里设好环境变量、再把变量名填进界面——这对公开版用户不可用。本轮目标：只填一个 API key → 选一个供应商（baseURL 自动带出）→ 拉取该 key 可用的模型列表 → 下拉选一个 → 保存。
+
+### 功能
+
+- **界面直接填 key，AES-256-GCM 静态加密落库**：新增 `src/lib/secret-box.js`——加密主密钥优先取 env `ANJIAN_SECRET`（须至少 32 字节 UTF-8 熵，另需字符多样性达标，不足/单一重复字符直接拒绝；`scrypt`（固定应用层 salt + 加重成本参数）派生出 32 字节 key，按 passphrase 精确值做进程内缓存以抵消 scrypt 引入的计算开销——具体强度校验与派生算法演进见下方"复审修复"小节），否则用数据目录下的 `secret.key`（首次自动生成 32 随机字节、写盘 `mode:0o600` 后再显式 `chmodSync` 一次钉死权限位，父目录已存在时不改其权限）。密文格式 `v1:<nonce base64>:<tag base64>:<密文 base64>`，GCM 认证加密——密钥错误或密文被篡改时 `decryptSecret()` 直接抛错，不会安静吐出乱码明文。
+- **取值优先级链（关键）**：`src/agent/config.js` 新增 `resolveAgentApiKey(config)`——`agent_api_key_env` 指向的环境变量若存在且非空 → 用它，`source:'env'`（保证现有 Docker/桌面部署零改动继续工作）；否则取界面存的加密 key（`getStoredApiKey()`，解密失败/格式非法一律安全失败为 `null`，不抛出）；两者都没有 → `source:'none'`。`agentReady()`/新增的 `agentKeyStatus()` 均基于这条链，`enabled=false` 时仍在任何 key 解析之前短路（与既有红线同一条判断）。
+- **`agent_api_key_env` 退居可选高级项**：`loadAgentConfig()`/`PUT /api/settings` 的校验从"必须是合法环境变量名"改为"留空则跳过校验、非空仍必须合法且不得是保留名/前缀"——不再是 `enabled` 判定的必要条件，`provider`/`model`/`baseURL` 仍然必需。
+- **`PUT /api/settings` 新增 `agent_api_key`**（明文入参，落库前加密）：空字符串是显式"清空已存 key"的信号；超过 4096 字符拒绝；类型非字符串拒绝。GET/PUT 响应体不再带出存储键 `agent_api_key_encrypted`（密文本身也不回显），改为三个计算字段 `agent_api_key_configured`（布尔）/`agent_api_key_source`（`env`\|`stored`\|`none`）/`agent_api_key_masked`（如 `…abcd`，只留末 4 位）——全程不经过 `agent_enabled` 门，配置期（尚未点启用开关）也能看到"我刚存的 key 有没有被认出来"。
+- **`src/agent/supervisor.js` 的子进程 credential 注入改用同一条取值链**：`_startWorker()` 用 `resolveAgentApiKey(config)` 替换原来直接读 `process.env[config.apiKeyEnv]`；子进程里存放 key 值的环境变量名改为**固定的 provider 专属名**（新增 `PROVIDER_CANONICAL_KEY_ENV`：`deepseek-official→DEEPSEEK_API_KEY`、`openai-completions→OPENAI_API_KEY`，与 `anqi.cordis.yml` 的 `DSH_API_KEY_ENV` 默认值一致），不再随用户是否填了 `apiKeyEnv`、也不再随 key 来源（env/stored）而变化——`apiKeyEnv` 现在只控制"取值链第一环去读宿主哪个环境变量名"，与"子进程里这个变量叫什么"是两件独立的事。脱敏层（`redactor([apiKeyValue, ...])`）按实际解析出的 key 值构造，无论来源如何都被同等覆盖，无需额外改动。
+- **新增 `POST /api/agent/models`**（`apiAuth`，刻意不经过 `agent_enabled` 门——这是"保存前先测试 key"的配置期工具）：入参 `{provider, baseURL, apiKey?}`；`baseURL` 复用与保存设置同一套 `validateBaseURL()`（协议/凭据/内网回环/deepseek-official 官方域，SSRF 防线不因为这是"辅助端点"而放松）；`apiKey` 省略时走上述取值链（请求体 > env > 已存加密 key）。网络层拆到独立模块 `src/agent/models-client.js`（`fetchProviderModels()`）：15s 超时、2MB 响应体上限（逐块读流累计字节数中途掐断，不信任 `Content-Length`）、解析 OpenAI 兼容格式（容忍 `{data:[{id,...}]}` 与裸数组两种形状）；上游 401/403→"API Key 无效或无权限"、404→"未提供 /models 接口"、其它非 2xx/网络错误/超时/畸形 JSON/无法识别的形状均映射为不含 key 值、不含上游原始响应体的中文错误。路由通过依赖注入点 `createAgentRouter(supervisor, {fetchModels})` 接线（默认真实实现，同 `AgentSupervisor` 的 `spawnFn` 注入风格），便于测试。
+- **`/api/counts` 与 `GET /api/agent/status` 新增 key 状态字段**：`counts` 新增 `agent_key_configured`/`agent_key_source`（既有 `agent` 布尔字段不变）；`/agent/status` 新增 `apiKey:{configured, keySource}`。均只回布尔/枚举，从不含 key 值。
+
+### 前端设置页（`public/profile.html` + `public/js/profile.js`）
+
+「用户中心 · AI 助理」面板按本轮目标重做，把「先在系统里设环境变量、再把变量名填进界面、还要手打模型名」压缩成「填一个 key → 选一个供应商 → 拉一次模型 → 下拉选一个 → 保存」：
+
+- **供应商联动**：`Provider` 下拉两项；选 `deepseek-official` 时 `Base URL` 自动带出官方地址并置为只读（用户不可编辑），选 `openai-completions` 时若当前值仍是刚自动填入的官方地址则清空，避免留下一个看似自定义、实际是残留官方地址的误导值。
+- **API Key 三态展示**：密码框按 `GET /api/settings` 派生的 `agent_api_key_source` 渲染——`env`（当前由环境变量提供）/`stored`（已保存，placeholder 显示末四位掩码，留空提交表示不修改）/`none`（尚未配置）；`stored` 态额外给出「清除已保存的 key」按钮（发一次 `agent_api_key: ""` 的显式清空 PUT，不依赖"先清空输入框再点主保存"这条容易被忽略的隐式路径）。三态文案都如实说明「保存在本机数据库并加密；能拿到数据目录的人可以解出来」。
+- **拉取模型下拉**：「拉取可用模型」按钮调 `POST /api/agent/models`，成功后把手填 `Model` 输入框切换成下拉框（保留「改手动填写」兜底，切回时把当前选中值带回输入框）；失败时把服务端返回的中文错误原样贴在按钮旁，不只依赖一闪而过的 toast。默认选中项的计算规则拆到不依赖 DOM 的纯函数 `public/js/agent-model-options.js`（`buildModelOptions()`），单独有单元测试。
+- **高级选项折叠**：`apiKeyEnv` 折进默认收起的 `<details>`「高级选项」（已存在非空值时自动展开，免得用户看不到「输入框被 env 锁住」的原因）；保留名黑名单与格式校验不变，权威仍在服务端。
+- 前端不重复实现任何一条服务端校验（白名单/格式/协议/保留名/SSRF）——校验不过就让服务端的中文错误显示出来，与全站其它表单一致。
+
+### 测试
+
+- `tools/test-secret-box.js`：往返、错误密钥解不开、畸形密文安全失败、`secret.key` 首次生成权限位 0o600 且幂等复用、`ANJIAN_SECRET` 熵校验与派生确定性、掩码函数边界。
+- `tools/test-agent-config.js` 新增取值优先级链场景（env 优先于 stored、两者皆无为 none、密文篡改安全失败、`enabled=false` 时短路不检查已存 key）。
+- `tools/test-agent-models-client.js`：真起本地 http 假服务器验证 `fetchProviderModels()` 网络层——两种 OpenAI 兼容格式解析、401/404/其它非 2xx/畸形 JSON/无法识别形状/响应体过大/超时/连接被拒，逐一映射到预期错误码，且错误消息不透传上游原始响应体（探针用会回显 key 片段的假 401 响应体验证过）。
+- `tools/test-agent-models-http.js`：路由层黑盒测试（注入假 `fetchModels`）——provider/baseURL 校验失败时确认从未调用 `fetchModels`、apiKey 取值优先级（请求体>env>已存）、错误码→HTTP 状态映射、审计与响应体逐一确认不含任何一个测试用明文 key。
+- `tools/test-agent-settings.js`/`tools/test-agent-http.js` 同步更新：`agent_api_key_env` 留空的新允许行为、`agent_api_key` 的加密落库/掩码回显/清空、`/agent/status` 新增 `apiKey` 字段的形状。
+- `tools/smoke-agent-profile-frontend.js`：设置页前端冒烟——新控件静态审查（四组控件齐全、`apiKeyEnv` 确实折进默认收起的 `details`）、`profile.js` 五条交互逻辑命中、真实 server 进程上跑 `agent_api_key` 明文入参 → 加密落库 → GET/PUT 只回掩码的往返、`apiKeyEnv` 优先级、显式空串清空，以及本地假 `/models` 服务器的解析形状与「回环地址即使显式带 apiKey 也照样 400」两条断言。
+- `tools/test-agent-model-options.js`：下拉框默认选中项的纯逻辑自检（命中/未命中/空列表四类场景）。
+- `tools/check.sh` 增至 46 步（详见 [agent-gates.md](agent-gates.md)）。
+
+### 复审修复（本轮，红线/SSRF/工程卫生）
+
+上面这批功能落地后经过一轮对抗复审，发现并修复了以下问题（均已合入本条目描述的同一个 beta.2 工作树，未单独发版）：
+
+- **`POST /api/agent/models` 堵住 key 外带通道**（当时的修复方案本身仍留有一个洞，二次复审已实证复现并真正修复，见下方"二次复审修复"）：该端点刻意不经过 `agent_enabled` 门（配置期"保存前先测 key"的正当设计），但此前 `apiKey` 省略时会无条件回落到 env/本机存储的 key，再把它当 Bearer 发给请求体里调用方指定的任意 `baseURL`——绕过了 `GET /api/settings` 只回末 4 位掩码这层保护。当时的修复：新增 `baseURLsShareOrigin()`，只有 `deepseek-official`（baseURL 已被钉死成官方域）或 `openai-completions` 且这次 `baseURL` 与已保存的 `agent_base_url` 同源时才允许回落，否则要求请求体显式带 `apiKey`。
+- **`fetchProviderModels()` 不再跟随 3xx 重定向**：`baseURL` 只在第一跳做过 SSRF 校验，默认 `redirect:'follow'` 会让一个已通过校验的公网地址用 302 把请求带进内网。改为 `redirect:'manual'`，3xx 显式拒绝为 `upstream_redirect_blocked`。
+- **`validateBaseURL()` 黑名单补漏**：新增拦截云元数据主机名（`metadata.google.internal`/`metadata.goog`/`*.internal`）、IPv4-compatible IPv6（`::a.b.c.d` 归一化后的纯十六进制形式，与已处理的 IPv4-mapped `::ffff:a.b.c.d` 不同）、`0.0.0.0/8`、RFC 2544 基准测试段 `198.18.0.0/15`。
+- **公网地址强制 https**：内网/回环地址已被整体拒绝，能通过该校验的 host 按定义就是公网地址，此前仍接受 `http:`，key 会明文过网；现与 android-v1.1.0 同一条规则对齐。**迁移提示**：升级到本版本后，存量 `agent_base_url` 若是公网 `http://` 地址会被 `validateBaseURL()` 拒绝（回环/内网地址不受此限），需要把该地址改成 `https://` 才能继续使用 AI 助理。
+- **`resolveAgentApiKey()` 自身复检 `apiKeyEnv` 格式/保留名**：此前只有 `loadAgentConfig()` 校验过 `isReservedEnvName()`，另外两处裸读 settings 表的消费者（`agent.js`/`settings.js`）会绕过这层校验；现在下沉进 `resolveAgentApiKey()` 本身，所有调用方自动继承。
+- **`agent_api_key` 落库前 trim**，纯空白输入显式拒绝（此前会静默存成"已配置"，但 supervisor 实际会拿一把空白 key 去启动 worker）。
+- **`secret.key` 首次生成的 TOCTOU 竞态**：并发首次生成时改用"写临时文件 + `linkSync` 原子提交"，不再可能被后写者覆盖或被并发读者读到半写状态。
+- **`secret.key` 纳入 `tools/backup.cjs` 备份**：此前该脚本只备份 `anjian.db`，现在同步备份 `secret.key`（若存在）；`SELF-HOSTING.md` 补充 `ANJIAN_SECRET`/`secret.key` 的配置参考与备份说明（此前完全没有文档提及这两者）。
+- **`baseURL` 拒绝查询参数/片段**：`models-client.js` 用字符串拼接 `${baseURL}/models`，带 `?`/`#` 的 baseURL 会把这个后缀拼进错误位置（探针实测 `/v1#frag` 结尾时 `/models` 被静默吞掉）。`validateBaseURL()` 现在直接拒绝这类输入。
+- **`ANJIAN_SECRET` 强度校验与派生算法加固**：长度校验（≥32 字节）之外新增字符多样性校验（至少 8 种不同字符，挡住 `'a'.repeat(32)`/32 个空格这类"够长但明显非随机"的输入）；派生算法从裸 `sha256`（无 salt、可被彩虹表复用、对短口令几乎不设防）改为 `scrypt`（固定应用层 salt + 加重的成本参数），并按 passphrase 精确值做进程内缓存以抵消 scrypt 引入的计算开销；`src/lib/startup-config.js` 新增进程启动时的校验（此前要等用户第一次保存 key 才会以一个 500 暴露配置错误，比 `ANJIAN_USER`/`ANJIAN_PASS_HASH`/`ANJIAN_INTERNAL_KEY` 这几个同样重要的凭据晚了一大截）。
+
+### 二次复审修复（本轮，上一轮复审的两处遗留红线）
+
+上一轮"复审修复"合入之后又经过一轮独立对抗复审，实证复现并修复了以下两处更深的问题（详见 [agent-gates.md](agent-gates.md) 门禁 9）：
+
+- **`POST /api/agent/models` 的"可信来源"门本身可以被同一权限面绕过**：上一轮把"这次的 `baseURL` 与已保存的 `agent_base_url` 同源"当作允许省略 `apiKey` 回落的信任凭据，但这个凭据本身就是同一个 `PUT /api/settings` 面可写的值——攻击者（典型场景 XSS）只需要两次请求：① `PUT` 把 `agent_base_url` 改成自己的地址（只需 `agent_provider`+`agent_base_url` 两个字段）；② 省略 `apiKey` 的 `POST /api/agent/models`，此时"同源"判定立刻为真，已存的完整明文 key 被解密后发给攻击者服务器——且这一切在 `agent_enabled=false` 时同样成立。**真正的修复**：`baseURLsShareOrigin()` 连同这条"同源即信任"分支整段删除，现在只保留 `provider === 'deepseek-official'`（baseURL 钉死官方域常量，不依赖 settings 表里任何攻击者可写的值）一种可以省略 `apiKey` 的情形；`openai-completions` 一律要求请求体显式带 `apiKey`。
+- **`validateBaseURL()` 的内网/回环拦截只做字符串匹配、不做 DNS 解析**：任何一个字符串看起来是合法公网域名、实际却解析到回环/内网地址（探针实测 `localtest.me` 真实解析到 127.0.0.1，属于这类现成的公网注册域名）都能跳过全部字符串黑名单校验。**修复**：新增 `resolvePinnedAddress()`（`src/agent/config.js`）——在真正发起请求前对 hostname 做一次真实 DNS 解析，任意一条记录落在内网/回环范围即整体拒绝；解析出的地址原样传给重写为 Node 核心 `http`/`https` 模块的 `fetchProviderModels()`（新参数 `pinnedAddress`），实际 TCP 连接直接打到这个已核对过的具体地址，不再让下层网络库重新解析一次 hostname，消除两次解析之间的 DNS rebinding 窗口；`Host` 头与 TLS SNI 仍使用原始 hostname（虚拟主机路由/证书校验的正确性要求，与安全边界分离）。字符串黑名单继续保留作为快速失败层。
+
+### 三次复审修复（本轮，二次复审"已修复"引入的两处可用性回归 + 一处健壮性问题 + 一处口径缺口）
+
+二次复审的两处安全修复合入之后又经过一轮独立复审，发现前两条安全收紧各自带出一个此前未被发现的用户可见可用性回归，另外还有一处纯健壮性问题与一处安全声明的范围缺口——均已在本轮修复：
+
+- **`resolvePinnedAddress()` 把 fake-ip 透明代理误判成"内网"，导致开代理的用户「拉取可用模型」100% 失败**：二次复审新增的连接期 DNS 解析复用了 `isPrivateOrLoopbackHost()`，其中 RFC 2544 基准测试段 `198.18.0.0/15` 的拦截是针对 baseURL **字符串字面量**设计的（防止用户直接敲一个不可路由的地址），但 Surge/Clash/ClashX 等透明代理的 fake-ip 模式默认就把**任意域名**解析到这个网段（Clash 默认 `fake-ip-range` 是 `198.18.0.1/16`）——探针在开着 Surge 的本机实测：`example.com`/`localtest.me`/`api.deepseek.com` 全部解析到 `198.18.x.x`，于是这条"字符串层"规则被原样套用到"DNS 解析结果"这一层时，把"用户开着任意 fake-ip 代理"整体误判成"baseURL 指向内网"。**修复**：`isPrivateOrLoopbackHost()` 新增 `skipRfc2544Bench` 选项，`resolvePinnedAddress()` 对解析结果的核对传 `true`（这段地址本来就不路由到公网，DNS 应答把域名指向这里时，实际能连到的对象只取决于本机代理软件自己怎么拦截/转发，不构成"攻击者借 DNS 把请求引到*别的*内网服务"这条真正的 SSRF 路径）；`validateBaseURL()` 对 baseURL **字符串本身**的校验不受影响，仍然拒绝这段地址的字面量。
+- **`openai-completions` 收紧到"必须显式 apiKey"之后，前端两条最常见路径必然先打一次注定 400 的请求**：二次复审把 `POST /api/agent/models` 收紧为"仅 `deepseek-official` 允许省略 apiKey"，但 `public/js/profile.js` 没有跟着改——(a) 已保存 key 的用户重开设置页、input 为空，点「拉取可用模型」直接 400；(b) key 来自环境变量时更彻底，输入框此前被无差别禁用，用户在界面上没有任何入口能补上这次显式要求的 key,该 provider 下「拉取模型」是死胡同。**修复**：新增 `updateFetchGate()`——`openai-completions` 且输入框为空时就地提示 + 按钮置灰,不再发出注定失败的请求；`applyKeyUI()` 的"env 来源禁用输入框"规则收窄为只对 `deepseek-official` 生效（该 provider 本来就允许留空回落,禁用只是如实说明"填了也不会覆盖运行时生效的 env key"）,`openai-completions` + env 来源下输入框保持可用,允许填一次"仅用于本次测试拉取,不保证持久化"的 key。
+- **`resolvePinnedAddress()` 只钉死 DNS 返回的首条记录，没有故障转移**：`records[0]` 一旦不可达（常见场景：`verbatim:true` 保留系统应答顺序,双栈域名先给出 AAAA 而宿主机只有 IPv4 出口）就直接 504,不像 undici/fetch 或普通 `http.request(hostname)` 那样有 Happy-Eyeballs/多记录重试的机会。**修复**：`resolvePinnedAddress()` 现在把**全部**通过校验的候选地址放进新增的 `addresses` 字段（`address`/`family` 两个字段保留向后兼容,等于 `addresses[0]`）；`fetchProviderModels()` 新增 `pinnedAddresses`（数组）参数,按顺序逐个尝试,只在"连接层面失败"（`network_error`/`timeout`,即从未真正拿到一个 HTTP 响应）时才换下一个候选——一旦某个地址给出真实 HTTP 响应（哪怕是 401/404 这类应用层错误）就立即原样抛出,不再尝试其余候选,避免把用户的真实错误原因掩盖成一条不相关的"最后一次尝试凑巧超时"。上限 4 条候选,纯粹是防止极端情形拖长等待,不是安全边界（每条候选都已经过同一套内网/回环核对）。
+- **【口径缺口，文档更新，非代码修复】** 门禁 9 与本条目"二次复审修复"里"现在只保留 `provider === 'deepseek-official'` 一种可以省略 `apiKey` 的情形"这句话容易被读成"已存明文 key 不可能再流向攻击者指定的主机"，但 `src/agent/supervisor.js` 的 worker 启动路径（`POST /api/cases/:id/agent/start`）仍然会用 `resolveAgentApiKey()` 解出同一把已存明文 key，连同同样客户端可写、且不经过 `resolvePinnedAddress()` 核对（只过字符串层 `validateBaseURL()`）的 `agent_base_url` 一起注入子进程环境——`openai-completions` 场景下，同一个能发 `PUT /api/settings` 的调用方理论上仍有一条门槛更高（需要 `agent_enabled=true`、需要真实案件、需要 DSH runtime 起得来、动静大且留审计）但确实存在的路径，能让子进程把明文 key 当 Bearer 发给攻击者指定的 `baseURL`。这条残余面本轮不改代码（门槛/影响面与 `POST /api/agent/models` 那条已修复的通道不在同一量级，且收紧 worker 启动路径涉及产品行为取舍，超出本轮范围），仅在 [agent-gates.md](agent-gates.md) 门禁 9 与"未覆盖/已知限制"补充准确记录，避免误导读者。
+
+### 减法：移除连接期 DNS 解析 + IP 钉住层（本轮，产品决策，非安全缺陷驱动）
+
+编排方复核上面几轮复审为 `POST /api/agent/models` 加的 `resolvePinnedAddress()`（连接期对 baseURL 的 hostname 做真实 DNS 解析、核对全部候选地址、钉住具体 IP 再发起请求，用来堵 `validateBaseURL()` 字符串黑名单堵不住的"看起来合法、DNS 却解析到内网/回环"这类域名）之后，决定将其连同全部接线（`pinnedAddress`/`pinnedAddresses` 参数、故障转移、`skipRfc2544Bench`/fake-ip 豁免）整体移除，理由：
+
+1. **它并未消除风险，只是把门槛从两步变三步**：`POST /api/agent/models` 已经在 `apiAuth` 之后，能调用它的调用方本来就能通过既有 supervisor 路径（改 `agent_base_url` + 开 `agent_enabled` + `POST /api/cases/:id/agent/start`）达成同等外联——worker 启动路径从未接入过 `resolvePinnedAddress()`（见上方"三次复审修复"第 4 条口径缺口记录），DNS 钉住只让这一个端点看起来更安全,实际风险敞口没有变化。
+2. **它在真实环境里会大面积误伤**：本机开着 Surge/Clash 等 fake-ip 类透明代理时，所有域名都会被解析到 `198.18.0.0/15`，为绕开这类误伤而加的豁免（三次复审新增的 `skipRfc2544Bench`）又让这道闸门对这批用户整体退化成 no-op——"有一道其实不生效的闸门，文档却写着它有效"比"明确没有这道闸门"更糟。
+3. **它给一个纯设置校验动作引入了运行时 DNS 依赖**：VPN/代理/企业 DNS 都会让"拉取可用模型列表"这条易用性流程报"网络错误"，与本轮"降低配置门槛"的目标直接冲突。
+
+**删除范围**：`src/agent/config.js` 的 `resolvePinnedAddress()`（及其 `isPrivateOrLoopbackHost()` 的 `skipRfc2544Bench` 选项）、`src/routes/agent.js` 里对它的调用与依赖注入点、`src/agent/models-client.js` 的 `pinnedAddress`/`pinnedAddresses`/`requestImpl` 参数与多候选故障转移逻辑，以及 `tools/test-agent-config.js` 场景 18、`tools/test-agent-models-client.js` 场景 12–15、`tools/test-agent-models-http.js` 场景 3.5 这些专门覆盖被删代码的测试，一并删除（不留"已废弃但仍存在"的死代码/死测试）。RFC 2544 基准测试段 `198.18.0.0/15` 作为 baseURL **字符串字面量**仍然被 `validateBaseURL()` 无条件拒绝，只是不再对"DNS 解析结果"这一层单独放行——因为这一层本身已经不存在。
+
+**现状（如实描述）**：`POST /api/agent/models` 的 SSRF 防线现在只剩 `validateBaseURL()` 这一层字符串校验（协议白名单/禁 userinfo/禁 query-fragment/公网强制 https/字面量回环-内网-链路本地-CGNAT-metadata 主机名黑名单/deepseek-official 官方域钉死），与 worker 启动路径处于同一水位；一个字符串看起来合法、实际解析到内网/回环的公网注册域名（如 `localtest.me` 一类）现在仍能通过这层校验——这是本轮明确接受的已知取舍，详见 [agent-gates.md](agent-gates.md) 门禁 9。
+
+### 修复：上游认证失败被误判为 anqi 会话过期（本轮，编排方人工验收发现的真实 UX 缺陷）
+
+**缺陷**：`POST /api/agent/models` 在上游（模型供应商）返回 401/403 时，`modelsErrorToHttpStatus()` 此前也让本端点回 HTTP 401（body 是 `{"error":"API Key 无效或无权限，请检查后重试","code":"upstream_unauthorized"}`）；而 `public/js/api.js` 的全局 fetch 封装把**任何** 401 一律当成"anqi 会话过期"直接 `location.href='/login.html'`。后果：公开版用户在设置页把 API key 填错一个字符、点「拉取可用模型」，就被直接踢回登录页，永远看不到上面这句写好的中文提示——正好击中本轮"降低配置门槛"的目标。
+
+**修复（两层，互为兜底）**：
+
+- **后端**：`src/agent/models-client.js` 的 `modelsErrorToHttpStatus()` 把 `upstream_unauthorized`（上游 401/403）的映射从 401 改成 **502**——401 现在专属 `apiAuth` 中间件的会话失效语义，本端点任何分支都不再产出 401。选 502 而非 422：502 Bad Gateway 的标准语义就是"网关/代理从上游收到了错误响应"，与本端点"代用户去问上游 key 是否有效"的角色对应；请求体本身（provider/baseURL/apiKey）对 anqi 而言语法语义均合法，出问题的是下游对凭据的判定，不是 422 通常表达的"anqi 收到的请求本身有误"（这类场景本端点已用 400 覆盖）。同时理顺了该端点全部上游状态码的映射（表见该函数顶部注释）：`upstream_not_found`（404）与 `upstream_error`/`timeout`/`network_error`（429/5xx/超时等）均确认不与 anqi 自身的 404/429 语义碰撞——全站没有任何前端代码对"带业务 `code` 的 404"做特殊分支，anqi 自己的 429 只出现在登录频率限制（`src/middleware/auth.js`）且从不与本端点共享同一次响应。
+- **前端纵深**：`public/js/api.js` 的全局 401 处理加一层判断——只有响应体不含非空字符串 `code` 字段（即 `apiAuth` 中间件返回的真会话失效，其 401 body 恒为 `{error:'unauthorized'}`，从不带 `code`）才跳登录页；带业务 `code` 的错误交给调用方按普通错误展示。不依赖"后端每个端点都记得避开 401"这一件事单独成立。
+- **顺带修复的兜底路径**：拉取模型失败时，若界面此时仍停留在上一次成功拉取留下的下拉框（切换 provider 或改了 key 后重新拉取失败），此前只有一枚「改手动填写」按钮可以切回手填、不是自动露出；`public/js/profile.js` 的拉取失败分支现在会在这种情况下自动调用既有的 `showModelManual()` 切回手填输入框（首次拉取就失败时手填框本来就是默认可见的一等控件，不受影响）。
+
+**测试**：`tools/test-agent-models-client.js` 新增场景 12，直接对 `modelsErrorToHttpStatus()` 这个纯函数做全表回归（核心断言 `upstream_unauthorized` 绝不能是 401）；`tools/test-agent-models-http.js` 场景 8 的 `upstream_unauthorized` 预期状态码改为 502 并新增"绝不是 401"的显式断言，另加场景 8.5——对 `public/js/api.js` 源码做静态断言，确认 401 分支确实依据 `body.code` 做判断、且 `location.href` 跳转确实被包在引用 `code` 的条件判断里（不是无条件跳转，回归此前的 bug 形态）；`tools/smoke-agent-profile-frontend.js` 新增对 `profile.js` 拉取失败分支「自动切回手填」逻辑的静态断言。
+
+### 已知边界（非本轮范围）
+
+- `PROVIDER_CANONICAL_KEY_ENV` 目前只覆盖已有的两个 provider 枚举值，新增 provider 时需要同步补充。
+- `POST /api/agent/models` 没有单独的调用频率限制：它是 `apiAuth` 之后的端点（需要已登录会话），每次请求最长占用 15s 超时窗口并向外发一次 GET。`validateBaseURL()` 的字符串黑名单保证目标不可能是字面量内网/回环地址，但一个已登录会话理论上仍可反复调用它对公网地址产生放大流量。GA 前可考虑加一条按会话的频率限制。
+- `agent_api_key_masked` 对 `env` 来源的 key 同样回末四位掩码——这是设计明确要求的展示（"掩码或布尔已配置"），但对既有的纯环境变量部署而言，是一个此前不存在的新增展示面（改造前 `GET /api/settings` 从不透出与 key 值相关的任何字符）。掩码只留末 4 位、长度 ≤4 时整串折叠为 `*`，且仅对已登录会话可见。
+- 数据结构新增一个 settings 键 `agent_api_key_encrypted`（无 migration，`settings` 是既有 key-value 表）；未配置时该键不存在，不影响任何既有功能。
+- **worker 启动路径与 `POST /api/agent/models` 共同的残余 key 外带面**：`openai-completions` 下 `agent_base_url` 客户端可写，`src/agent/supervisor.js` 的 `buildSpawnEnv()` 会把已存明文 key 与该 baseURL 一起注入子进程；`POST /api/agent/models` 则要求该 provider 下必须显式带 `apiKey`（见上方"二次复审修复"）。两条路径现在都只过字符串层 `validateBaseURL()`，不再有"一条路径比另一条更安全"的落差（见上方"减法"小节）。GA 前应评估是否需要对 `agent_base_url` 变更加二次确认、或 baseURL 变更后要求已存 key 重新确认。
+
+## 2.7.0-beta.1 — AI 助理 sidecar（分支 `feat/agent-sidecar`，尚未合并 `main`）
+
+**状态：已于 2026-08-22 以 `v2.7.0-beta.1` 预发布；尚未合并 `main`。**
+
+### 功能
+
+- 新增受信任写面 `POST /internal/agent-proposals`：DSH agent 的 task-only 提案专用入口，与既有 `/internal/inbox`（L2 自动化）分开、不共用去重状态机；event/deadline 一律拒绝，`source`/`case_id` 由服务端固定，`case_id` 只能来自 `session-registry.js` 的 session→case 绑定反查，body 里带的 `case_id` 一律被忽略；`source_ref.session_id` 同样由服务端用反查得到的权威值覆盖，不采信 worker 自报值。落库后复用 `/api/today` 收件卡片渲染。
+- 新增 `agent_*` 系统设置键（`agent_enabled`/`agent_provider`/`agent_base_url`/`agent_model`/`agent_api_key_env`，定义在 `src/agent/config.js`）：sidecar **默认关闭**（`agent_enabled` 未显式置 `true` 时不读 credential、不 spawn 子进程、不发模型请求）。这批键现已接入 `/api/settings` 的白名单（`enabled` 须为布尔、`provider` 只认枚举、`model` 非空、`apiKeyEnv` 须为合法环境变量名且不得是 anqi 自身保留名/前缀、`baseURL` 走协议/凭据/内网回环/deepseek-official 官方域校验——与 `loadAgentConfig()` 共用同一份 `validateBaseURL()`/`isReservedEnvName()`，两处不会各自漂移）；`provider`/`baseURL` 联动校验（改 provider 时重新核对已存 `baseURL`），整批校验失败 400、一个键都不落。
+- `AgentSupervisor`（`src/agent/supervisor.js`）已接入 `server.js`：新增 `src/routes/agent.js`（工厂函数 `createAgentRouter(supervisor)`）挂 `GET /api/agent/status`、`POST /api/cases/:id/agent/{start,prompt,cancel}`、`GET /api/cases/:id/agent/events`（authenticated SSE，服务端按 case 过滤，不接受任何客户端提交的 session id 做过滤依据）、`POST /api/agent/interactions/:id/answer`（one-shot；interactionId 是唯一入参，case/worker 完全由服务端反查 `findInteractionOwner()`，approval 的受限 outcome / question 的严格逐题答案校验，未知/过期/跨 session/worker 已退一律拒绝并审计，不落敏感值）。`prompt` 路由不等待整轮完成（一次 turn 可能耗时到 `turnTimeoutMs`），只做同步门禁校验后 202 立即返回，真实进度/结果走 SSE。proposal accept/decline 未新增任何模型可达入口，继续复用既有 `/api/inbox/:id/accept|decline`。`server.js` 新增 SIGTERM/SIGINT 优雅退出钩子：调用 `supervisor.stopAll()` 取消所有 turn、终止所有 worker 后再退出，覆盖裸进程终止与 Electron `before-quit` 两条路径。`/api/counts` 新增 `agent` 字段（与 `llm` 字段同一种特性探测模式：`enabled` 且 `apiKeyEnv` 指向的环境变量确有值才为 `true`）。动态门禁验收（真实 DSH 子进程、真实模型 key）留给后续 workflow。
+- 修复轮五：SSE 事件订阅（`onEvent()`）此前挂在 Worker 实例上——worker 尚未创建时静默注册空订阅、worker 重建（崩溃/被 stop 后重新 start）后旧订阅被孤儿化，整条 §4 下行通路实际不通；现改为登记在 supervisor 层（`caseId → Set<listener>`），`Worker.emit()` 经 `supervisor._dispatch()` 扇出，与 worker 实例生命周期解耦。`AgentSupervisor` 新增 `setInternalBaseURL()`：`server.js` 在 `httpServer.listen()` 回调里用 `httpServer.address().port` 拿到真实端口去纠正 `internalBaseURL`（此前默认值硬编码 3007，与实际监听端口不符，DSH 子进程回调 anqi MCP 工具全部 ECONNREFUSED）；`electron/main.js` 为每次启动随机生成一份 `ANJIAN_INTERNAL_KEY` 注入后端子进程 env（不持久化），修复桌面版此前必然 `internal_key_missing` 而无法启动 AI 助理的问题。新增 `AgentSupervisor.isLive()`/`publicStatus()`：路由层不再复刻内部 `LIVE_STATUSES` 字面量集合，HTTP/SSE 下行也不再携带内部 `sessionId`/`cwd`/`pid`。`gracefulShutdown()` 给 `stopAll()` 套一个 8s 总时限的 `Promise.race`，跑满即调用新增的 `forceKillAll()` 兜底强杀，避免优雅关闭的 5s 兜底在 stopAll 落定之后才起算、实际不设上限。
+- 修复轮六至九（读面越权、桌面版 key 攻击面、事件伪造、打包守卫）：**读面补上与写面同一条信任规则**——新增 `GET /internal/agent-case-view` 与 `GET /internal/agent-digest`，两者都按 `session-registry.js` 的 session→case 绑定反查案件，请求方无法用任何参数选择读哪个案件；DSH 插件的 `anqi_case_get` 去掉模型可控的 `name` 参数、`anqi_digest` 不再打全所口径的 `/internal/digest`，单案 worker 因此在机械层面读不到绑定案之外的任何案件（此前只有 persona 提示词约束，不是约束）。面向外部自动化的 `/internal/cases/byname/:name` 与 `/internal/digest` 语义不变。**桌面版自动生成的 internal key 收窄作用域**：`electron/main.js` 注入随机 key 时同时设 `ANJIAN_INTERNAL_KEY_SOURCE=electron-auto`，`internalAuth()` 见到该标记时只放行三个 agent 端点、其余 `/internal/*` 一律 403——桌面版每次启动不再顺带打开整套可枚举/读出任意案件的外部自动化读面；用户自己显式配置的 `ANJIAN_INTERNAL_KEY`（无该标记）行为完全不变。**子进程事件不能冒充宿主事件**：wire 侧 `session.event` 的 `type` 撞上 supervisor 保留名（`interaction/pending` 等）时强制重写成 `wire/<type>`，每条事件新增 `origin`（`supervisor`/`wire`）标记并经 SSE 透传，子进程无法靠撞名伪造一张审批待办卡片。前端 `agent-drawer.js` 的 `status` 首帧监听器同一条信任规则再加一层纵深：真实 `status` 首帧（`supervisor.publicStatus()` 投影）顶层从不带 `origin` 字段，一旦出现即视为 wire 一侧伪造帧并丢弃，不依赖服务端单侧把关。`GET /api/cases/:id/agent/events` 在 `agent_enabled` 非 `true` 时与 REST `/api/agent/status` 同一判定短路，首帧直接下发 `disabled` 且不触碰 worker 状态。DSH 子进程回连地址不再硬编码 `127.0.0.1`：监听通配地址时回落回环，监听具体地址时按实际绑定地址回连（IPv6 字面量加方括号）。`tools/check.sh` 增至 37 步，新增 session 绑定只读面路由回归与打包清单守卫（从 `server.js` 遍历相对路径静态 import 图 + minimatch 重放 `build.files`，机械保证 `build.files` 不会再把 `server.js` 真正 import 的 `src/**` 文件排除出打包产物）。
+- **门禁取证发现并处置：模型侧文件读取工具移除**——直接调用本仓库生产实际装配的 `@deepseek-ai/dsh-fs-sandbox`（`SandboxedFileSystem`）验证出，它只对 write/edit 做了路径 containment，`read`/`glob` 对绝对路径完全没有围栏，唯一防线是 persona 提示词的文本劝阻，不是代码强制（详见 `docs/agent-gates.md` 门禁 1/3「已知限制」）。在 DSH 上游提供可配置的 read containment 之前，编排方决策是 beta 从 `preset/anqi/agent.cordis.yml` 整体移除 `@deepseek-ai/dsh-tool-fs`（read/read_image/write/edit）与 `@deepseek-ai/dsh-tool-fs-search`（glob/grep），`tools/check.sh` 新增机械守卫防止未评估就加回来。**beta 中 AI 助理不含文件正文读取能力（隐私默认），案件事实经案齐结构化接口提供；GA 计划以受控白名单开放。**
+- 案件页助理抽屉（`public/js/agent-drawer.js`）的只读工具白名单补齐 `skill`/`ask_user_question`/`todo_write`（dsh-tool-skill/dsh-tool-ask-user/dsh-tool-todo 的真实工具名）：三者都不写案件数据（分别是读取受信任 skill 定义、向律师提问、写助理会话自己的待办草稿），此前漏标导致律师在工具调用摘要里看到误导性的「🔧 xxx · 写入」。`worker/exit` 事件处理器新增 `state.pendingToolCalls.clear()`：worker 退出后清空孤儿 `pendingToolCalls` 记录，避免残留累积、也避免新 worker 复用同一 `callId` 字面值时被错配到上一任 worker 的工具名。
+- 打包完整性坑（修复轮）：R2 首版有两处已定位并修复的问题——(1) `src/agent/supervisor.js` 的 `ensureAssetsNodeModulesLink()` 此前在打包模式下也会每次 `start()` 尝试运行时创建/纠正 `agent-runtime/assets/node_modules` 符号链接，而这份目录是已签名 app 资源树的一部分，运行时写入会撕开 `codesign --deep` 的资源封条（首次跑 AI 助理后 `codesign --verify --deep --strict` 从 valid 变成 sealed-resource-missing）——现在改为这条链接在 `electron-builder` 的 `afterPack` 阶段建好（`build/afterpack-agent-runtime-link.cjs`），随 `afterSign` 的重签一起封存，运行时只做只读校验；(2) session transcript 根目录（`DEFAULT_SESSION_ROOT`）此前在打包模式下解析进 `Contents/Resources/app/data/agent-sessions`（app 资源树本体，非用户 dataDir），且目录名直接是案件夹绝对路径——现在由 `electron/main.js` 显式把 `ANJIAN_AGENT_SESSION_ROOT` 注入到 `dataDir/agent-sessions`，与 `DB_PATH` 同一模式。
+
+### 打包
+
+- AI 助理是**可选**能力，安装/升级到本 beta **不改变任何现有行为**：`agent_enabled` 系统设置键默认缺省（等价 `false`），未显式开启前不读 credential、不解析 `apiKeyEnv`、不 spawn 子进程、不发出任何模型请求，整块 UI（案件页助理抽屉、设置页 AI 助理分区）按既有红线不渲染。
+- 打包方式：DSH sidecar 的运行时依赖（`src/agent/runtime/node_modules`，含 node-pty 等真正跨平台预编译原生模块，以及 sharp/koffi/ripgrep 这类按宿主 os/cpu 挑选的可选原生模块——这些现由 CI 补齐 macOS 双架构，见下方「CI 打包管线补齐」）与只读资产（`src/agent/assets`：cordis 配置 + 受信任 skills）改由 `electron-builder` 的 `build.extraResources` 整棵复制进 `Contents/Resources/agent-runtime/{runtime,assets}/`，不进 `asar`、不做依赖裁剪。`src/agent/supervisor.js` 新增打包模式路径解析：优先探测 `process.resourcesPath` 下这份拷贝，探测不到（dev 模式、或未打包的纯 `node server.js`）则回退仓库路径，两种模式代码路径完全一致。`tools/test-pack-manifest.js` 同步新增机械核验：`build.extraResources` 的 `from`/`to` 必须与 supervisor.js 约定的 `agent-runtime/<name>` 相对路径精确一致，防止两侧配置各自漂移。
+  - **披露：本轮 bundle 的是全闭包，与 spike 设计记录的建议相反。** `anqi-spike-dsh/spikes/dsh-agent/docs/packaging-numbers.md` 的结论明确是"不要把 179MB 的现有全闭包直接绑进 anqi DMG；若要 bundle，应 bundle trace-derived 的 reached-only scratch 闭包"——该闭包安装后（未压缩）体积约 71,444 KiB，压缩成 `tar.gz` 后为 19,235,570 B，相当于 2.6.0 基线 DMG 体积（140,389,719 B）的 13.70%。本轮为了让打包版首次真正跑起 AI 助理、赶 beta 时间线，选择了被否掉的那条路——实测双架构 DMG 均较 2.6.0 基线（140,389,719 B）显著增大：arm64 200,356,527 B（+42.71%），x64 205,187,873 B（+46.16%），分别是推荐路线压缩体积占比（13.70%）的约 3.1 倍、3.4 倍。两侧 DMG 之间的差值主要来自跨架构原生包共存——arm64、x64 各自不需要的另一侧 sharp/koffi/ripgrep 原生二进制都随两个 DMG 分发，使每个 DMG 各多背约 11.3 MB 用不到的另一侧架构二进制。依赖裁剪出 trace-derived 最小闭包（含去掉这部分跨架构冗余）留给 GA 阶段处理，不是本轮范围。
+- **CI 打包管线补齐**：`.github/workflows/release.yml` 此前只 `npm ci` 根依赖，从未安装 `src/agent/runtime`（独立 npm 包根，根 `package.json` 无 workspaces）自己的依赖——`electron-builder` 的 `extraResources` 复制对此不报错，只是静默产出一个空的 runtime 目录，官方发行的 DMG 里 AI 助理会是内容不明的 crashed worker。现在新增显式安装步骤，并在打包后核验两个架构的产物里确实含有 DSH 运行时入口文件与 `assets/node_modules` 符号链接。`tools/test-pack-manifest.js` 原有的 node_modules 硬编码坑核验，判据改成两条并存（`from` 目录下是否存在 `package.json` / 是否存在 `node_modules`，任一命中即拦截）——单独查 `node_modules` 在 CI/全新 clone 上必然不存在、断言空转，单独查 `package.json` 又看不见"有 node_modules 却没有 package.json"这种边缘配置，两条一起查才不随本机安装状态漂移。
+  - **修复轮追加：x64 DMG 里 AI 助理此前会崩溃启动，现已实测修复。** `src/agent/runtime` 的 `sharp`/`koffi` 是按宿主 os/cpu 挑选的 `optionalDependencies`——CI runner 是 macos-latest（arm64），`npm ci` 只装出 darwin-arm64 的原生二进制，但 `build.extraResources` 把这同一棵 `node_modules` 原样复制进 arm64、x64 两个 DMG（不按目标架构筛选）。此前 x64 DMG 因此没有 darwin-x64 的 sharp/koffi，AI 助理常挂插件 `attachment-local`（顶层 `import sharp`，非懒加载）一加载就崩：`Error: Could not load the "sharp" module using the darwin-x64 runtime`。新增 `build/ensure-cross-arch-optional-deps.mjs`：从 `package-lock.json` 里已记录的 resolved tarball URL + integrity 摘要出发，把宿主 npm ci 没装的那一侧原生包补装进同一棵 `node_modules`（两侧共存，sharp/koffi 运行时按 `process.arch` 各自选对应二进制），`release.yml` 在 `npm ci --ignore-scripts` 之后、`electron-builder` 打包之前调用它；打包后核验步骤新增按架构核对 `@img/sharp-darwin-<arch>` 确实存在。实测：本机真实构建双架构 DMG，`arch -x86_64 node` 在打包产物的 x64 `agent-runtime/runtime` 下真实 `require('sharp')`/`require('koffi')` 均加载成功（此前会报模块找不到），两个架构 `codesign --verify --deep --strict` 均 valid。
+  - **修复轮追加（复审第二轮）：核验判据从"目录存在"收紧为"二进制文件本身存在"，并把跨架构补装脚本改成原子写入。** `release.yml` 的 "Verify agent runtime bundled in DMG" 步骤原本对 sharp 只核验 `test -d "@img/sharp-darwin-<arch>"`——目录存在但里面的 `.node` 原生二进制被裁掉/复制中断的半成品也会通过，是一个"空目录盖章"死角；现改为 `test -f ".../lib/sharp-darwin-<arch>-*.node"`，并同时点名核验 `@koromix/koffi-darwin-<arch>/darwin_<arch>/koffi.node` 与 `@vscode/ripgrep-darwin-<arch>/bin/rg` 两个此前完全没被核验覆盖的原生依赖家族（`dsh-tool-fs-search` 用的 ripgrep 二进制、`dsh-tool-fs` 用的 koffi 原生绑定，都是同一类按宿主架构选择的 `optionalDependencies`，同样会被两个 DMG 共享同一棵 `node_modules` 而缺失）。用真实 bash 3.2.57（macOS 系统自带、CI runner 同款）对提取出的完整脚本做过正控（三类原生二进制齐全时通过）与三项负控（sharp/koffi/ripgrep 分别缺失时各自报出对应 `FATAL` 并非零退出）。`build/ensure-cross-arch-optional-deps.mjs` 的 `downloadAndExtract()` 同步改为先解包到 `destDir` 同级的 staging 目录，成功后再 `fs.renameSync()` 原子改名进最终位置，`catch` 里清理 staging 目录与可能留下的半成品 `destDir`——消除此前"`mkdir(destDir)` 之后 `tar` 中途失败/被打断，目录留一半却被 `fs.existsSync(destDir)` 误判成"已装过"而永久跳过"的坑。已用真实网络下载 + 故意注入的 `tar` 失败做过一次正控（重装后与原文件 sha256 逐一比对一致）与一次负控（`tar` 失败后 `destDir`/staging 目录均不残留）。
+- **打包链路收拢：`node build/ensure-cross-arch-optional-deps.mjs` 并进 `npm run dist`**，不再是一步容易被人忘记执行的独立手动命令：`package.json` 的 `scripts.dist` 现在是 `electron:rebuild && node build/ensure-cross-arch-optional-deps.mjs && electron-builder --mac`，任何调用 `npm run dist` 的路径（本机手动打包、未来新增的自动化）都会自动带上这一步；`release.yml` 仍保留原有的显式 CI 步骤（脚本本身幂等，重跑不产生副作用，只是在 Actions 日志里多一行“已存在，跳过”）。`tools/check.sh` 第 1 步的 `node --check` 清单同步补上此前从未被语法核验覆盖的三个打包脚本：`build/adhoc-sign.cjs`、`build/afterpack-agent-runtime-link.cjs`、`build/ensure-cross-arch-optional-deps.mjs`。
+- **发行管线预发行标记**：`vX.Y.Z-beta.N`/`-rc.N` 这类带预发行段的 tag 现在会让 `release.yml` 的 `gh release create` 自动带上 `--prerelease`，避免 GitHub Release 被现网稳定版用户的 `electron-updater` 当作"最新版"误推送升级。
+- **修复轮追加：补齐此前零自动化护栏的四处（`tools/check.sh` 增至 38 步）**——F1/F6 新增的几条代码路径此前只有一次性手工实测背书，没有可复跑的回归测试：(1) `tools/test-agent-supervisor.js` 新增场景 24，用"设置 `process.resourcesPath` 后以带独立 query 的 dynamic import 重新加载 `supervisor.js`"在同一测试进程里真正实例化打包分支，覆盖 `ensureAssetsNodeModulesLink()` 的只读校验三条路径（链接缺失/指向错误目标均拒绝且不写入，链接正确但 `assets` 目录本身只读时仍能放行到 spawn，证明这条路径全程不写入）；(2) 新增 `electron/backend-env.js`：把 `electron/main.js` 里"`startBackend()` 拼接的 env map"与"`ANJIAN_TEST_USERDATA` 的 argv 门判断"两段不依赖 `require('electron')` 的纯逻辑抽出来（行为不变，纯提取），配 `tools/test-electron-backend-env.js` 断言 `DB_PATH`/`ANJIAN_FILES_ROOT`/`ANJIAN_AGENT_SESSION_ROOT` 三条路径确实落在 `dataDir` 下且互不相同、`ANJIAN_TEST_USERDATA` 必须与 argv 开关同时出现才生效；(3) 同一测试文件新增对 `server.js` 源码的机械正则核验，确认它确实把 `process.env.ANJIAN_AGENT_SESSION_ROOT`（含 fallback `undefined`）传给 `AgentSupervisor`，防止两侧同一个环境变量名的任意一侧改名/拼错。四项均用故意注入的对应 bug 做过负控验证（跑测试确认会失败），修复后复跑绿。`tools/test-pack-manifest.js` 的 node_modules 硬编码坑判据同时收紧成两条并存（见上方「CI 打包管线补齐」），不再是单一判据。
+- **Docker 镜像也能跑 AI 助理**：此前 `Dockerfile` 只装根依赖，`COPY src ./src` 把 `src/agent` 源码带进镜像却从不安装 `src/agent/runtime` 自己的依赖（同一个"独立 npm 包根、根 `npm ci` 装不到"的坑，桌面版靠 `extraResources` 解决，Docker 这条路径此前完全没处理），干净镜像里 `supervisor.start()` 必然失败。现在 `Dockerfile` 新增一层 `(cd src/agent/runtime && npm ci --ignore-scripts)`（与 `release.yml` 同款命令），单独成层放在 `COPY src` 之前以复用分层缓存；新增 `.dockerignore`（此前仓库没有这个文件——`docker build .` 的 context 不受 `.gitignore` 约束，本机若已装过 `src/agent/runtime/node_modules`，`COPY src ./src` 会把宿主机架构的原生模块覆盖进镜像，跟目标容器架构不一致时会直接崩）。`assets/node_modules` 符号链接与 AI 助理会话记录落点（`ANJIAN_AGENT_SESSION_ROOT`）在 Docker 的目录布局下本来就会算对，靠的是 `src/agent/supervisor.js`/`server.js` 已有的"dev 模式回退"逻辑，不需要额外的 Dockerfile 处理，只是此前从未有人验证过这条路径——真机（jackie，x86_64）冒烟走完整链路验证：镜像用 `docker buildx build --platform linux/amd64`（Mac 侧 QEMU 模拟出 amd64 目标）构建、`docker save`/`docker load` 传上 jackie，随后**在 jackie 原生 amd64 硬件上执行**（`docker inspect` 核实 `Arch=amd64`）：`healthz` → 登录 → `PUT /api/settings` 开 `agent_enabled` → 建案件+对应文件夹 → `POST /api/cases/:id/agent/start` → `status` 变为 `ready`（DSH 子进程真实 spawn，`session/preflight` 核验通过，子进程环境变量确认 `DSH_SESSION_ROOT=/app/data/agent-sessions`）→ 关闭开关后子进程被 `stopAll()` 真正杀掉（按 pid 逐一核实，不是只看 API 返回值）；构建/冒烟用的临时容器、镜像与 `/mnt/mmcblk0p3` 下的临时目录已在验证脚本 `trap cleanup` 与验证后手工核实中清空，全程未触碰宿主上正在运行的 `anjian` 容器（验证前后 `RestartCount`/`StartedAt` 一致）。镜像体积（amd64 实测）从 275MB 增至 467MB（+192MB，+69.8%，DeepSeek Agent SDK 全家桶 + 原生模块预编译产物，与桌面版 `extraResources` 复制的是同一棵 `node_modules`）；AI 助理默认关闭，不启用时这些文件只占磁盘、不参与运行。已知边界：本轮冒烟只覆盖 `linux/amd64`，`linux/arm64` 镜像的 AI 助理路径尚无门禁验证（见 SELF-HOSTING.md 对应小节）。`docker-release.yml` 新增预发行标签守卫：版本号带 `-`（如本 beta 的 `2.7.0-beta.1`）时只推 `:<version>` 一个标签，不再推 `:<minor>`（会算出 "2.7.0-beta" 这种误导性标签）和 `:latest`（会让拉 latest 的现网部署被静默升级到 beta），判定与 `release.yml` 的 GitHub prerelease 标记同一条正则，且判断条件写成 fail-closed（显式等于 `"false"` 才追加额外标签，而不是"不等于 true 就追加"）——`is_prerelease` 输出万一异常/为空，保守地只推 `:<version>`，不会误把预发行版推成 `:latest`；冒烟步骤新增机械断言，核验 `/app/src/agent/runtime/node_modules` 存在且 `@deepseek-ai/dsh-base` 能被 `require()`，防止这层将来再退化。详见 [SELF-HOSTING.md](../SELF-HOSTING.md) 新增的「AI 助理（可选）」小节。
+- **数据结构无迁移**：本 beta 不新增/不修改任何 migration，`anjian.db` 的 schema 与 2.6.0 完全一致——beta 与 2.6.0 之间可以直接互换回退（降级安装 2.6.0 DMG、或反过来升级到本 beta），都不需要任何数据搬迁或转换步骤；唯一的新状态是 `settings` 表里可能多出的 `agent_*` 五个键（默认关闭状态下这些键即便不存在也不影响任何既有功能）。
+- 版本号 `2.7.0-beta.1`：预发行序列，语义化版本先行位（beta.N）供内部迭代标记，不代表已通过完整 GA 验收；产物文件名与体积记录见打包证据文档（scratchpad 工作日志，正式发行前会归档进 `RELEASING.md` 流程）。
+
+## 未发布 — 助理指引与顶栏交互修复
+
+- AI 助理技能指引（`anqi-case-brief/SKILL.md`）对齐 beta.5 直写工具面：旧文本仍写着「联系人永不出现在工具结果里、不得自行记录」并只准走 `anqi_inbox_propose`，导致助理从案卷提取到当事人电话/身份证后只能包装成一条待办建议（刘芳案实况）。新指引明确：提取到的当事人信息直接 `anqi_contact_upsert` 写入（AI 戳、可改可撤）并在回复中报告，「把 X 记进案件」类事项禁止再做成待办或软建议；`anqi_inbox_propose` 只留给律师本人才能决定/执行的工作。
+- 顶栏「收件箱 N」徽标从纯文字改为链接：点击跳今日页 `#sec-inbox-card` 收件箱卡片。卡片在数据载入前是 `hidden`，浏览器落地锚点滚动找不到目标，today.js 在 `load()` 末尾（各区块填充完、页面达最终高度后）补滚一次；`#sec-inbox-card` 加 `scroll-margin-top` 为 sticky 顶栏让位。
+
+## 未发布 — 依赖升级
+
+- Express 4.22 → 5.2：路由全为简单 `:param`，未使用 v5 移除的 API；`tools/check.sh` 全绿，无行为变化。
+- better-sqlite3 12.11 → 13.0：上游改用 N-API，预编译产物随包自带（含 darwin arm64/x64、linux glibc/musl），`electron:rebuild` 不再触发本机编译；SQLite 3.53.4。随之 Node 最低版本升为 22（`package.json.engines`），`allowScripts` 同步为 `better-sqlite3@13.0.3`。Dockerfile 改为 `npm install --omit=dev --ignore-scripts`：node:22-slim 自带的 npm 10 不认 v13 的 `"gypfile": false`，会对 `binding.gyp` 触发 node-gyp 编译而 slim 镜像无工具链（docker-release 干跑首次即因此失败，修后 amd64 / arm64 本地构建与冒烟均通过）。已知无害噪音：v13 在 `db.close()` 后事件循环短暂存活，自检第 25 步末尾会打印数条 `legalrag bridge tick … connection is not open`，测试仍通过。
+- GitHub Actions 全组升级到 Node 24 运行时（checkout v7、setup-node v7、setup-java v5、upload-artifact v7、download-artifact v8、docker/* v4·v7）；download-artifact v8 起摘要不匹配默认失败。三条发行 workflow 需在下次发版前用 `workflow_dispatch` 干跑一次。
+
+## 2.6.0 — 开源转换与安全基线
+
+**状态：2026-08-17 作者完成 `LEGAL-NOTICE.md` 与期限规则表核准，放行首次公开提交。**
+
+### 许可证与归属
+
+- 项目许可证改为 `AGPL-3.0-only`；根 `LICENSE` 使用 GNU AGPL 3.0 官方完整文本，`package.json.license` 同步。
+- 删除 Electron 打包时的 JavaScript 混淆钩子和 `javascript-obfuscator`。2.0.0 的专有 EULA、禁商用政策和 DMG 混淆均是**历史事实，现已被本次转换取代**；AGPL 本身允许商业使用，但网络交互、修改与分发须遵守许可证义务。
+- Noto Sans SC / Noto Serif SC 继续按 SIL Open Font License 1.1 分发；`LICENSES/OFL-1.1.txt`、字体来源和保留名称说明随桌面包一并收录。
+- 增加 `ACKNOWLEDGEMENTS.md`、`LEGAL-NOTICE.md`、`SECURITY.md`、`SELF-HOSTING.md` 与公开贡献治理。`LEGAL-NOTICE.md` 已于 2026-08-17 经作者核准，公开版不再带待核准标记。
+
+### 安全加固（首批）
+
+- 启动改为 fail-closed：默认只监听 `127.0.0.1`；账号与密码 hash 必须成对配置；非回环监听还必须配置独立 `ANJIAN_INTERNAL_KEY`。
+- 只保留精确 `ANJIAN_UNSAFE_NO_AUTH=1` 的开发逃生口，且仅限非 production 与明确回环 IP；其他组合拒绝启动。
+- 增加显式 trusted-proxy 策略；客户端来源与 HTTPS 状态统一使用 Express 解析后的 `req.ip` / `req.secure`。
+- 密码 hash 改为版本化 `scrypt-v1$N$r$p$dkLen$salt$hash`，保留旧 `salt:hash` 验证兼容并在成功登录时提示维护者手工迁移。
+- 登录限速按来源与账号分桶并设置 TTL 和容量上限；会话数据库与 cookie 同步滚动续期。
+- migration 016 将 session 时间统一为 UTC；配套 fixture 验证存量升级、完整性与回滚边界。
+- production 未捕获异常只返回稳定错误码与 UUID correlation ID，完整错误留在服务端日志。
+- 固定分成引用查询的 prepared statement，不再让动态表名进入 SQL。
+
+### 安全加固（第二批）
+
+- 案件创建与改名统一要求 `cases.name` 为单一、非隐藏的目录名称；文件 API、款项凭证和 LegalRAG 改为共用真实路径安全层。
+- 文件根先解析 canonical realpath；案件夹、中间目录和目标逐级 `lstat` 拒绝符号链接，并在操作前后复核真实路径 containment 与 inode 身份。目录列表和 reconciliation 不跟随链接。
+- 文件取流以 `O_NOFOLLOW` 打开已验证描述符；上传以 `O_CREAT|O_EXCL|O_NOFOLLOW` 原子创建，消除 `exists→write` 覆盖竞态，同时保留重名 `(2)` 行为。读取端点把穿越、符号链接和真实路径越界统一隐藏为 404；写入类非法输入继续返回可纠正的 400。
+- `ANJIAN_STATIC_TOKEN`、`X-Anjian-Key` 和用户名均先摘要为固定长度，再用 `timingSafeEqual` 比较；未知用户名也执行配置 hash 的完整 scrypt 验证。
+- 增加正常中文路径、案件根/中间目录/目标符号链接、路径整体替换、重名上传、凭证和 LegalRAG 的单元与 HTTP 回归。
+
+### 公开治理与发行转换
+
+- README 改为公开项目说明；Issues、Discussions 与 Forks 欢迎，外部 Pull Request 依据维护政策自动关闭。该政策不缩减 AGPL 授予的权利。
+- 增加 Bug、Feature 与期限规则勘误表单。期限勘误只是一条待独立法律复核的线索，不会自动改变 `rules/deadline_rules.json` 的 review 状态。
+- `RELEASING.md` 已改写为 GitHub Releases、GHCR 与 Android 三条公开发行线：tag 才能发布，手动 dispatch 只能构建、校验并上传 Actions artifacts 和 `.sha256`。
+- Electron 工具链升级到 Electron 43.4.0、electron-builder 26.15.7、`@electron/rebuild` 4.2.0 与 electron-updater 6.8.9，更新源切为 `zj-ai-lab/anqi` 的 GitHub provider；增加按月分组的 Dependabot 配置。
+- macOS 与 Android workflow 只在对应 tag 下写入 GitHub Release，Docker workflow 只在 `v*` tag 下向 `ghcr.io/zj-ai-lab/anqi` 推送 `X.Y.Z`、`X.Y` 与 `latest` 多架构镜像；手动 dispatch 永久限于 dry-run。三条 workflow 已移除 SSH/scp、私有主机与生产路径，并通过 tag 门、权限、secret 集合和私有坐标反向验收；2026-08-17 首次公开提交已获放行，tag、Release、镜像与实例升级仍按各自发行流程另行执行。
+
+### 首次公开候选补全
+
+- Android WebView 壳移除固定站点与 host App Link：首次启动必须配置服务器 origin，之后可从常显原生控件修改；Intent 和站内导航改为严格同源比较，切换实例会清除登录态。公网地址必须 HTTPS；只有 loopback、RFC1918 与 `.local` 可显式使用 HTTP，并在界面提示明文风险。
+- `/internal` 未显式携带 actor 时的新默认值改为 `internal`；升级前已落库的 `hermes` 只作为历史兼容证据保留，不做 migration 或批量重写。公开界面、运行时代码和 migration 注释中的特定同步/自动化/代理产品措辞改为中性能力描述。
+- 公开 README 改为 Docker-first 且符合 fail-closed 启动顺序的完整自托管说明，补产品边界、完整能力表、架构图、Android 连接规则与当前 UI 三皮肤截图。九张 1440×900 演示图只含虚构数据，图标源 PNG 与三份生成/构图提示记录一并收入 `garden-gpt-image-2/`。
+
+---
+
+## 0.1.0–1.2.0 — 台账、期限与分成基础
+
+### 0.1.0：P0 电子台账
+
+建立 Node.js ESM + Express + better-sqlite3 单进程骨架、编号 migration、Web UI 与 `case` CLI。案件、事件、期限、待办、工作日志和收件箱使用同一 SQLite 真相源；附件只存案件夹指针。
+
+### 0.2.0：确定性期限引擎
+
+事件进入正式表后由纯函数读取规则和节假日数据派生期限；法院指定期限只标缺口，不由模型填空。级联重算保护人工覆盖，L0 digest 不经过任何模型。
+
+### 0.3.0–0.5.0：登录、费用与文件桥
+
+账号密码替代反向代理 URL token，浏览器使用 30 天会话；静态 token 仅保留给受信任 CLI。新增律师费台账和案件文件桥：配置根下的案件夹是唯一文件真相源，数据库只存引用，解除关联不删除原件。
+
+### 1.0.0：v5 三皮肤
+
+v4“翡翠·增强”原型采用以品牌色为中心的玻璃氛围，后续评审认为它与期限管理内容关系不足。v5 改为“一个骨架、三种材质”：
+
+| 皮肤 | 角色 | 材质 |
+|---|---|---|
+| `pro` | 默认亮色 | 白表面、1px 灰边、零阴影、等宽数字 |
+| `paper` | 纸感亮色 | 暖白纸底、直角、衬线、零玻璃 |
+| `jade` | 暗色 | 墨绿底、受控毛玻璃与弥散光 |
+| `auto` | 跟随系统 | 亮色映射 pro，暗色映射 jade |
+
+共享层负责布局，皮肤层只负责材质；`border-width` 恒为 1px，粗规则线用 inset shadow，避免切换皮肤时推动内容。`anjian-skin` 等既有 localStorage 键继续保留。
+
+1.0.0 同时为案件夹增加 SSE 文件变化推送；平台不支持 `fs.watch` 时，前端只在页面可见期间对轻量目录指纹进行降级轮询。
+
+### 1.1.0：同步与异步 LLM 两条确认路
+
+快录整理只接收用户输入的最小文本，只能返回 `task | log` 表单建议。案件匹配在本地进行且只认唯一命中；人按“记”才写库。后台提取或导入属于异步场景，只能进入 inbox 等待人工裁决。两条路径共同保持“LLM 没有正式写入口”。
+
+### 1.2.0：合作分成
+
+migration 005 建立分成约定和台账。已收律师费可按人工确认的约定形成应付分成；L0 增加待分提醒，统计增加分成后净口径。分成不进入期限引擎，也不开放 LLM 写入。
+
+---
+
+## 1.3.0–1.4.2 — 分成审计闭环
+
+### 1.3.0：分成体系化
+
+分成从平行孤儿台账变为可挂到具体款项的一等记录。全局总账采用：
+
+```text
+net_retained = paid − share_payable + share_receivable
+```
+
+无案件归属的外部应收只进入全局总账，不伪造本案款项。手工挂账、约定解析和来源款变更均有同案校验与幂等边界。
+
+### 1.3.1：历史修复工作台
+
+migration 006 只将满足严格条件的升级前孤儿分成加入人工修复队列，不自动改金额、挂款、合并、删除或重算。人工可认领同案已收款、保留未认领或逻辑作废；软重复只作提示，例外认领必须填写理由。`is_void=1` 的历史证据保留，但退出正常列表、总账、统计和 L0。
+
+### 1.4.0：公式与结算闭环
+
+migration 007 将分成建模为 agreement / immutable revision / fee plan / settlement run / snapshot / ledger 五层：
+
+- 金额以整数分、比例以万分位保存；封闭 DSL 只允许有序 fixed/rate 扣减与 terminal 计算。
+- 后端使用 `BigInt` 逐步向零取整并保存 trace，浏览器不计算钱。
+- 未收计划和 preview 不进入总账；确认时在 `BEGIN IMMEDIATE` 中重读、重算并原子写入不可变快照和台账。
+- 公式新版不静默替换已钉版本；更正和撤销追加 cancellation / adjustment，不覆盖历史。
+
+案件页和费用页复用同一结算组件，避免不同入口产生不同金额口径。
+
+### 1.4.1–1.4.2：防重与阅读层级
+
+migration 008 增加 active agreement 唯一性、历史/手工台账与引擎台账的硬冲突检查，以及嵌套 savepoint 保护。费用明细改为“款项事实 / 收款条件 / 分成与结算”三层，实际分成另起结果带；三皮肤保持同骨架。
+
+---
+
+## 1.5.0–1.7.5 — 文书派生、推荐闭环与律师化界面
+
+### 1.5.0：案件夹 × LegalRAG
+
+migration 009 保存文件 revision、持久队列、提取运行与候选。案齐和可选 LegalRAG 服务登记同一共享原件，按 checksum 复用解析；同路径内容变化追加 revision。首次启用只建立存量基线，不把历史文件自动全量送去 OCR。
+
+提取器类型闭合为 `fee | event`，不能产生 deadline 或 share。候选连续展示路径、页码和原文；收费候选由人确认，事件确认后才交给确定性期限引擎。旧 revision 和未裁决候选在新 revision 出现时退出当前队列，但历史证据不删除。
+
+### 1.5.1–1.6.1：分成管理律师化
+
+应收与应付改成两个直达动作；金额和扣费尚未确定时允许先封存暂定公式，但不生成金额台账。migration 010 增加结算约定、暂定状态与待定扣费。
+
+默认界面不要求使用者理解 revision、assignment、run 或 snapshot，而是连续回答“谁给谁分、怎么算、现在能确定多少、什么时候结算、下一步是什么”。底层不可变版本、后端重算和并发保护保持不变。费用首页只突出总账净额，并明示：
+
+```text
+律师费已收 − 已发生应付分成 + 已发生应收分成
+```
+
+### 1.7.0：推荐与文书事实闭环
+
+migration 011 引入两项闭环：
+
+1. L2 推荐用固定 intent 和服务端状态指纹识别，不把模型标题当身份。pending、snoozed、采纳后待办仍 open、同状态 declined 等情况只累计 seen；相关业务状态变化后才可解释性重提。
+2. LegalRAG 将逻辑事实与来源证据分表。人工裁决跨文件和 revision 继承，而每份路径、页码、引文和置信度继续保留。
+
+`/internal/inbox` 只接受固定来源的 task 建议白名单，不接受日期、event、note 或 deadline。
+
+### 1.7.1–1.7.5：四轮 UX 走查
+
+- 案件页快录默认挂当前案；跑道支持改期且保留人工覆盖；结案/搁置和删除增加确认。
+- 费用页可直接记款；未确认分成前置展示；`unpaid ↔ waived` 可逆，已有真实结算历史时继续硬拦。
+- 文书筛选升级为“LLM 语义判断 + 本地 fail-closed”：只准入本案直接原始材料、高置信且可回指 OCR 的引文；检索报告、类案、分析、草稿和引用材料清零。
+- 待办/日志就地录入；时间线默认只构建最近 20 条；文件区常驻拖放面。
+- 案件搜索补案由和法院；危险动作、分成月份与引擎行按钮保持前后端一致。
+
+---
+
+## 1.8.0–1.9.0 — 工作台阅读层级
+
+### 1.8.0：今日、案件与费用三页重构
+
+今日页按“先处理这个 / 还在追的期限 / 今天要做的 / 等你裁决”排序；案件页改为卷宗抬头、主工作流和侧栏；费用页突出单一净额和“要追的钱”。三页不改变原有写入口。
+
+migration 012 增加 `fee_item_files`，款项凭证固定写入案件夹 `财务凭证/`，数据库只存引用。待办首次完成时在同一事务生成工作日志，重复完成不重复留痕。
+
+### 1.8.1：日历全状态一致性
+
+修复日历 SQL 只返回 open 待办的问题；done/dropped 待办改为灰显划线。图例变成语义正确的筛选按钮，类型与“已处理”偏好保存在既有本地存储键中。
+
+### 1.9.0：待办三层分组
+
+今日页增加今日 / 本周 / 全部三层。`effective = due_on || plan_date`；今日和本周互斥，全部兜底所有 open task，无日期项以“未排期”沉底。示例和测试只使用虚构案件数据。
+
+---
+
+## 2.0.0–2.2.6 — 桌面产品化与日历调度
+
+### 2.0.0：历史闭源阶段
+
+2.0.0 曾将 actor 默认值从个人标识改为 `ANJIAN_DEFAULT_ACTOR || 'web'`，并通过 migration 013 清理可变记录；同时引入 DMG JavaScript 混淆和专有 EULA。后两项现已由 2.6.0 开源转换明确取代，本节只保留历史事实，不表示当前许可证政策。
+
+### 2.0.2–2.0.3：桌面监听与 migration 013
+
+Electron 后端改为明确监听 `127.0.0.1`，避免桌面应用意外暴露到局域网。未签名且只发行 DMG 时，更新操作改为打开下载页，避免 `electron-updater` 走不存在的 zip 静默更新路径。
+
+初版 migration 013 试图修改受 migration 007 不可变触发器保护的历史 actor，带存量数据会启动失败。2.0.3 改为：
+
+- 不改不可变 formula revision 和 settlement run 的历史 actor；
+- 只按乐观锁契约更新 assignment，`version + 1` 且 `updated_at` 严格变晚；
+- 增加带存量数据的 migration fixture，反向断言三个写守卫仍存在且有效；
+- migration 与 `PRAGMA user_version` 保持同一事务，失败整体回滚。
+
+### 2.1.0：对外更名 ANQI
+
+中文名案齐不变，对外英文名改为 ANQI。以下兼容标识故意不改：
+
+- npm 包名 `anjian`；
+- Electron appId `asia.fdonglawyer.anjian`；
+- `ANJIAN_*` 与 `X-Anjian-Key`；
+- localStorage 键、数据库名和 Electron userData 目录。
+
+这些标识关联既有配置和持久数据；看到 `anjian` 不是遗漏。
+
+### 2.1.1–2.1.4：首次引导、桌面外壳与 PWA
+
+- 修复 onboarding 脚本与 preload 全局同名导致整份脚本无法解析的问题；选定父目录后自动创建“案齐数据”子目录。
+- macOS 图标按 1024 画布内 824 图形本体重排；网页图标使用去透明边裁法。
+- `hiddenInset` 窗口在 Electron 侧注入红绿灯让位和拖拽区，不污染浏览器版布局。
+- migration 014 增加设置表，只有姓名、执业证号、律所、电话、邮箱和办公地址六个白名单键可写。
+- 增加 Web App Manifest 和 maskable 图标；随后把 maskable 主视觉缩到 62%，为 Android 遮罩保留安全区。
+
+### android-v1.0.0：Android 壳
+
+独立 Gradle 工程使用单 Activity + WebView，支持深链、文件选择、带会话 Cookie 的下载、FileProvider 打开文件、网页历史返回和断网重试。Android 版本线使用 `android-v*`，不占用服务端 `v*` 版本号。
+
+### 2.2.0：日历待办调度台
+
+migration 015 为任务增加可选 `due_time`。日历增加未排期托盘、任务弹层、按案件配色、跨天长条、开工/截止端点和分钟级显示；服务端校验日期顺序，并在端点交叉时钳到同日。
+
+### 2.2.1：ad-hoc 重签
+
+无 Developer ID 时，electron-builder 产物曾保留 Electron 出厂 linker ad-hoc 签名，可能共享已被系统撤销的 CDHash。`build/adhoc-sign.cjs` 对应用执行项目自己的 deep ad-hoc 重签，并断言不再是 linker-signed 且 Identifier 保持 `asia.fdonglawyer.anjian`。检测到正式证书时钩子跳过。
+
+ad-hoc 只能把“共享签名被撤销”降级为普通未公证应用的手工放行；无 Developer ID 与公证时，不承诺静默安装或零弹窗。
+
+### 2.2.2–2.2.6：拖拽、折叠与留痕
+
+- 删除互相触发 `pointercancel` 的 HTML5 DnD 双轨，统一为 Pointer 输入；真实拖拽验收必须使用真实输入管线，合成 `dispatchEvent` 不算通过。
+- 跨天长条使用固定车道，同周等高，多任务分道；支持整体平移和端点调整。
+- 全站低频区域使用原生 `<details>` 渐进披露；日历合并为连续 sheet。
+- 案件阶段真正变化时自动生成工作日志；重复或无变化 PATCH 不造日志。
+- 案件款项和费用案件条的折叠、尺寸与面板边距在三皮肤和 390px 下保持一致。
+
+---
+
+## 2.3.0–2.5.0 — 信息密度、字体与候选去重
+
+### 2.3.0：折叠三手法
+
+一页主视线最多保留一道归档箭头，其余内容分为：
+
+- **事实条 `.factstrip`**：固定事实常显，编辑时就地展开；
+- **账本行 `.ledger`**：同构集合在收起态仍是可读数据行；
+- **归档门 `.archive-door`**：已完结、已忽略或已归档的整段，放在页面末尾。
+
+8 页折叠门总数由 27 收到 6。案件款项明细切换改为缓存数据的纯前端重渲染，不再为开合额外请求 API。
+
+### 2.4.0：费用页层次与自托管字体
+
+费用页从跨案连续表改为案卡堆：每案独立卡片，展开后以状态色带、背景深井和款项白卡分层。粘性抬头随滚动收缩，只钉导航行，并用不占布局高度的 mini overlay 显示净额与待追款。
+
+Noto Sans SC / Noto Serif SC 使用 OFL 1.1 的 unicode-range WOFF2 切片自托管，按页面实际字符加载；可变字重 100–900 提供真实层级。字体许可证、来源与保留名称说明随源码和桌面产物分发。
+
+### 2.5.0：LegalRAG 收费候选持久去重
+
+收费事实收敛为“来源证据 → 逻辑事实 → 正式收费 alias”：
+
+- 本地确定性代码按同案 strict typed key 返回 `zero / unique / ambiguous`。标签做 NFKC/大小写/空白归一；金额使用权威整数分；明确日期相同，日期为空时才比较付款条件。
+- `unique` 只建立关联，不新增或修改正式收费；`zero` 和 `ambiguous` 留给人工，多命中绝不任选第一条。
+- 人工可显式把事实关联到任意同案收费；同 fact key 在其他文件、revision 或 schema 中再次出现时继承 alias。
+- 历史 accepted/declined 优先于系统匹配。正式收费编辑不重算 alias；删除时在同一事务把关联事实转为可恢复的 declined 并清理软链接，不自动改绑。
+- 自动与人工关联都在 immediate transaction 中重查 pending 状态和案件所有权；跨案拒绝，歧义接受返回冲突。
+- 界面显示唯一/歧义提示和“关联已有收费”；三皮肤与 390px 保持同骨架。
+
+本版无 migration、无新依赖。

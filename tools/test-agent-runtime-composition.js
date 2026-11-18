@@ -1,0 +1,184 @@
+import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import readline from 'node:readline';
+import { fileURLToPath } from 'node:url';
+import { eventTypeGroups } from '../src/lib/vocab.js';
+
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const ASSETS = path.join(ROOT, 'src/agent/assets');
+const CONFIG = path.join(ASSETS, 'anqi.cordis.yml');
+const BIN = path.join(ASSETS, 'bin.mjs');
+
+async function bootAndPreflight(mode, { pluginPatch = '', onReady, scope = 'case', envOverrides = {} } = {}) {
+  const scratch = fs.mkdtempSync(path.join(os.tmpdir(), `anqi-dsh-${mode}-`));
+  const cwd = path.join(scratch, 'case');
+  const sessionRoot = path.join(scratch, 'sessions');
+  const sandboxTemp = path.join(scratch, 'sandbox-temp');
+  const databasePath = path.join(scratch, 'protected.db');
+  fs.mkdirSync(cwd);
+  fs.mkdirSync(sessionRoot);
+  fs.mkdirSync(sandboxTemp);
+  fs.writeFileSync(databasePath, 'composition-boundary-placeholder');
+  const skillRoot = path.join(scratch, 'skills');
+  const skillName = scope === 'global' ? 'anqi-global-intake' : 'anqi-case-brief';
+  fs.mkdirSync(path.join(skillRoot, skillName), { recursive: true });
+  fs.copyFileSync(path.join(ASSETS, 'skills', skillName, 'SKILL.md'), path.join(skillRoot, skillName, 'SKILL.md'));
+
+  const sessionId = `composition-${mode}`;
+  const child = spawn(process.execPath, ['--expose-internals', BIN, CONFIG], {
+    cwd: ASSETS,
+    env: {
+      PATH: process.env.PATH,
+      HOME: process.env.HOME,
+      LANG: process.env.LANG || 'en_US.UTF-8',
+      DSH_CORDIS_CONFIG: CONFIG,
+      DSH_PROVIDER_KIND: 'deepseek-official',
+      DSH_API_KEY_ENV: 'DEEPSEEK_API_KEY',
+      DEEPSEEK_API_KEY: 'composition-test-key',
+      DSH_BASE_URL: 'https://api.deepseek.com',
+      DSH_MODEL: 'deepseek-chat',
+      DSH_CAPABILITY_MODE: scope === 'global' ? 'project' : mode,
+      DSH_ANQI_SCOPE: scope,
+      DSH_PERMISSION_MODE: scope === 'global' || mode !== 'full' ? 'read-only' : 'workspace-write',
+      DSH_CWD: cwd,
+      DSH_ANQI_FILES_ROOT: scratch,
+      DSH_ANQI_DB_PATH: databasePath,
+      DSH_ANQI_SANDBOX_TMP: sandboxTemp,
+      DSH_ANQI_SKILLS_ROOT: skillRoot,
+      DSH_SESSION_ROOT: sessionRoot,
+      DSH_PREFLIGHT_TIMEOUT_MS: '8000',
+      ANQI_BASE_URL: 'http://127.0.0.1:9',
+      ANQI_INTERNAL_KEY_ENV: 'ANJIAN_INTERNAL_KEY',
+      ANJIAN_INTERNAL_KEY: 'composition-test-internal-key',
+      ANQI_AGENT_SESSION_ID: sessionId,
+      DSH_ANQI_EVENT_TYPES: JSON.stringify(eventTypeGroups),
+      ...(pluginPatch ? { DSH_PLUGIN_PATCH: pluginPatch } : {}),
+      ...envOverrides,
+    },
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
+
+  let sequence = 0;
+  let stderr = '';
+  const pending = new Map();
+  const output = readline.createInterface({ input: child.stdout });
+  output.on('line', (line) => {
+    let message;
+    try { message = JSON.parse(line); } catch { return; }
+    const request = pending.get(message.id);
+    if (!request) return;
+    pending.delete(message.id);
+    if (message.error) request.reject(new Error(`${message.error.message}\nDSH stderr:\n${stderr}`));
+    else request.resolve(message.result);
+  });
+  child.stderr.on('data', (chunk) => { stderr += chunk.toString('utf8'); });
+
+  const rpc = (method, params = {}) => new Promise((resolve, reject) => {
+    const id = String(++sequence);
+    pending.set(id, { resolve, reject });
+    child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id, method, params })}\n`);
+  });
+  const killTimer = setTimeout(() => child.kill('SIGKILL'), 20_000);
+
+  try {
+    await rpc('initialize', { cwd, provider: 'deepseek-official', model: 'deepseek-chat' });
+    await rpc('session/create', { sessionId });
+    const preflight = await rpc('session/preflight', { sessionId });
+    assert.equal(preflight.ready, true);
+    assert.deepEqual(preflight.skills.names, [skillName]);
+    const readyResult = onReady
+      ? await onReady({ rpc, preflight, sessionId })
+      : new Set(preflight.tools.visibleNames);
+    await rpc('shutdown');
+    child.stdin.end();
+    await new Promise((resolve, reject) => {
+      child.once('exit', (code) => code === 0 ? resolve() : reject(new Error(`DSH exited ${code}: ${stderr}`)));
+    });
+    assert.doesNotMatch(stderr, /plugin tree failed to load|failed to apply loader entry/);
+    return readyResult;
+  } finally {
+    clearTimeout(killTimer);
+    output.close();
+    if (child.exitCode === null) child.kill('SIGKILL');
+    fs.rmSync(scratch, { recursive: true, force: true });
+  }
+}
+
+const projectTools = await bootAndPreflight('project');
+for (const name of ['read', 'read_image', 'write', 'edit', 'glob', 'grep', 'skill', 'todo_write', 'anqi_worklog_add']) {
+  assert.ok(projectTools.has(name), `project 档缺少案件项目工具 ${name}`);
+}
+for (const name of ['bash', 'web_search', 'subagent', 'workflow', 'ralph']) {
+  assert.equal(projectTools.has(name), false, `project 档不应发布完整能力工具 ${name}`);
+}
+
+const fullTools = await bootAndPreflight('full');
+for (const name of [
+  'bash', 'web_search', 'subagent', 'subagent_fork', 'list_agents', 'send_message',
+  'workflow', 'ralph', 'create_goal', 'get_goal', 'update_goal', 'str_replace_editor',
+  'job_list', 'job_output', 'job_kill',
+]) {
+  assert.ok(fullTools.has(name), `full 档缺少上游完整能力工具 ${name}`);
+}
+
+console.log('agent runtime composition tests: project/full real boot + scoped tools + trusted skill passed');
+
+const globalTools = await bootAndPreflight('full', { scope: 'global' });
+for (const name of ['anqi_case_resolve', 'anqi_case_select', 'anqi_case_get', 'anqi_worklog_add', 'anqi_task_add', 'anqi_event_add', 'anqi_contact_upsert', 'anqi_fact_add', 'anqi_deadline_add', 'anqi_inbox_propose', 'ask_user_question', 'skill', 'todo_write']) {
+  assert.ok(globalTools.has(name), `global scope 缺少工具 ${name}`);
+}
+for (const name of ['read', 'read_image', 'write', 'edit', 'glob', 'grep', 'bash', 'web_search', 'subagent']) {
+  assert.equal(globalTools.has(name), false, `global scope 不应发布 ${name}`);
+}
+console.log('agent runtime composition global scope: project-only tools + global skill passed');
+
+// 事件类型词表由 supervisor 注入；缺了必须在挂载 preset 时就失败，不能静默发布没有 type 枚举的 anqi_event_add。
+// 0.2.x 起 loader 的失败前缀从 "failed to apply loader entry dsh-anqi" 变为
+// "dsh-anqi (<path>):"——正则只锚定插件名与必含的错误说明，不依赖前缀格式。
+await assert.rejects(
+  bootAndPreflight('project', { envOverrides: { DSH_ANQI_EVENT_TYPES: '' } }),
+  /dsh-anqi[\s\S]*DSH_ANQI_EVENT_TYPES/,
+);
+console.log('agent runtime composition: missing DSH_ANQI_EVENT_TYPES fails preset mount (fail-closed)');
+
+// DSH 0.2.x 移除了 app-boot 的 watchUserPatches（热重载只剩 profile 体系），
+// 可信第三方插件补丁从「原地热重载」降级为「重启 worker 生效」：设置页改
+// agent_plugin_patch 时 supervisor.stopAll() 已有联动，下次 spawn 用新补丁。
+// 这里验证新契约：同一补丁文件被修改后，新 worker 按新内容装载。
+const hotRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'anqi-dsh-plugin-hot-'));
+try {
+  const pluginFile = path.join(hotRoot, 'hot-plugin.mjs');
+  const patchFile = path.join(hotRoot, 'cordis.patch.yml');
+  const toolsImport = path.join(
+    ROOT,
+    'src/agent/runtime/node_modules/@deepseek-ai/dsh-tools/lib/index.js',
+  );
+  fs.writeFileSync(pluginFile, `
+import { defineTool } from ${JSON.stringify(`file://${toolsImport}`)};
+export const inject = ['tools'];
+export function apply(ctx) {
+  ctx.tools.register(defineTool({
+    name: 'anqi_hot_plugin_probe',
+    description: 'test-only hot plugin probe',
+    parameters: {},
+    output: { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: value }] },
+    async execute() { return 'ok'; },
+  }));
+}
+`);
+  const mountedPatch = `- insert:\n    - id: anqi-hot-plugin-probe\n      name: ${JSON.stringify(pluginFile)}\n`;
+  fs.writeFileSync(patchFile, mountedPatch);
+
+  const mountedTools = await bootAndPreflight('full', { pluginPatch: patchFile });
+  assert.ok(mountedTools.has('anqi_hot_plugin_probe'), 'full 档应装载补丁声明的 anqi_hot_plugin_probe');
+
+  fs.writeFileSync(patchFile, '[]\n');
+  const afterEditTools = await bootAndPreflight('full', { pluginPatch: patchFile });
+  assert.equal(afterEditTools.has('anqi_hot_plugin_probe'), false, '补丁清空后的新 worker 不应再装载 anqi_hot_plugin_probe');
+  console.log('agent plugin compatibility test: trusted Cordis patch mounts at boot and applies after worker restart');
+} finally {
+  fs.rmSync(hotRoot, { recursive: true, force: true });
+}
